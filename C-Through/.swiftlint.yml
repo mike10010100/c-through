@@ -1,0 +1,58 @@
+included:
+  - Sources
+  - Tests
+line_length: 120
+identifier_name:
+  min_length: 2
+  max_length: 60
+cyclomatic_complexity: 15
+function_body_length: 60
+type_body_length: 250
+file_length: 500
+opt_in_rules:
+  - empty_count
+  - vertical_whitespace
+  - trailing_newline
+  - opening_brace
+  - statement_position
+  - colon
+  - comma
+  - semicolon
+  - empty_parameter_list
+  - void_return
+  - shorthand_operator
+  - redundant_void_return
+  - unused_optional_binding
+  - closure_spacing
+  - redundant_nil_coalescing
+  - legacy_constructor
+  - return_arrow_whitespace
+  - unneeded_break_in_switch
+  - vertical_whitespace_between_cases
+  - discarded_notification_center_observer
+  - redundant_type_annotation
+  - sorted_imports
+  - unavailable_function
+  - redundant_string_enum_value
+  - empty_enum_arguments
+  - unused_closure_parameter
+  - redundant_discardable_let
+  - convenience_type
+  - discouraged_object_literal
+  - anyobject_protocol
+  - attributes
+  - discouraged_direct_init
+  - redundant_optional_initialization
+  - unused_private_declaration
+  - fatal_error_message
+  - empty_string
+  - empty_collection_literal
+  - single_test_class
+  - switch_case_on_newline
+  - trailing_comma
+  - unneeded_parentheses_in_closure_argument
+  - vertical_parameter_alignment_on_call
+  - modifier_order
+  - force_unwrapping
+  - force_cast
+  - force_try
