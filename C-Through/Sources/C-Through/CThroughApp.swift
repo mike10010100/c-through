@@ -1,3 +1,4 @@
+import AppKit
 import CThroughEngine
 import SwiftUI
 
@@ -5,7 +6,8 @@ import SwiftUI
 
 struct DeviceAnchorData: Equatable {
     let id: String
-    let center: Anchor<CGPoint>
+    let leadingAnchor: Anchor<CGPoint>?
+    let trailingAnchor: Anchor<CGPoint>?
 }
 
 struct DeviceAnchorKey: PreferenceKey {
@@ -48,20 +50,23 @@ class DeviceViewModel: ObservableObject {
 
 struct ContentView: View {
     @ObservedObject var viewModel: DeviceViewModel
-    @State private var zoomScale: CGFloat = 1.0
-    @State private var offset: CGSize = .zero
-    @State private var lastOffset: CGSize = .zero
 
     var body: some View {
         ZStack {
             Color(NSColor.windowBackgroundColor).ignoresSafeArea()
 
-            // The Scrollable/Zoomable Canvas
-            GeometryReader { proxy in
+            // Native macOS Zoomable/Pannable ScrollView
+            ZoomableScrollView {
                 ZStack {
-                    // Tree Content
-                    HStack(alignment: .center, spacing: 150) {
-                        // Devices
+                    // 1. Connection Lines (In the Background)
+                    GeometryReader { proxy in
+                        Color.clear.overlayPreferenceValue(DeviceAnchorKey.self) { anchors in
+                            ConnectionLinesView(anchors: anchors, devices: viewModel.devices, proxy: proxy)
+                        }
+                    }
+
+                    // 2. Nodes (In the Foreground)
+                    HStack(alignment: .center, spacing: 180) {
                         VStack(alignment: .trailing, spacing: 60) {
                             if viewModel.devices.isEmpty {
                                 Text("No USB devices found.").foregroundColor(.secondary)
@@ -72,56 +77,25 @@ struct ContentView: View {
                             }
                         }
 
-                        // Host
                         HostMacBookNode()
-                            .anchorPreference(key: DeviceAnchorKey.self, value: .center) {
-                                [DeviceAnchorData(id: "HOST", center: $0)]
+                            .anchorPreference(key: DeviceAnchorKey.self, value: .leading) {
+                                [DeviceAnchorData(id: "HOST", leadingAnchor: $0, trailingAnchor: nil)]
                             }
                     }
-                    .padding(200)
-                    .scaleEffect(zoomScale)
-                    .offset(offset)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                // Draw Connection Lines on top using preferences
-                .overlayPreferenceValue(DeviceAnchorKey.self) { anchors in
-                    ConnectionLinesView(anchors: anchors, devices: viewModel.devices, proxy: proxy)
+                    .padding(400) // Large canvas for panning
                 }
             }
-            .contentShape(Rectangle())
-            .gesture(
-                DragGesture()
-                    .onChanged { value in
-                        offset = CGSize(
-                            width: lastOffset.width + value.translation.width,
-                            height: lastOffset.height + value.translation.height
-                        )
-                    }
-                    .onEnded { _ in lastOffset = offset }
-            )
-            .gesture(
-                MagnificationGesture()
-                    .onChanged { value in zoomScale = value.magnitude }
-            )
 
             // Overlays
             VStack {
                 Spacer()
-                HStack(alignment: .bottom) {
+                HStack {
                     LegendBox().padding(40)
                     Spacer()
-                    // Zoom readout
-                    if zoomScale != 1.0 {
-                        Text("\(Int(zoomScale * 100))%")
-                            .font(.system(size: 12, weight: .bold, design: .monospaced))
-                            .padding(8)
-                            .background(Capsule().fill(.ultraThinMaterial))
-                            .padding(40)
-                    }
                 }
             }
 
-            // Refresh Button
+            // Top Bar Overlay
             VStack {
                 HStack {
                     Spacer()
@@ -136,6 +110,34 @@ struct ContentView: View {
                 }
                 Spacer()
             }
+        }
+    }
+}
+
+// MARK: - Native Zoomable ScrollView
+
+struct ZoomableScrollView<Content: View>: NSViewRepresentable {
+    @ViewBuilder let content: Content
+
+    func makeNSView(context _: Context) -> NSScrollView {
+        let scrollView = NSScrollView()
+        scrollView.hasVerticalScroller = true
+        scrollView.hasHorizontalScroller = true
+        scrollView.allowsMagnification = true
+        scrollView.magnification = 1.0
+        scrollView.maxMagnification = 5.0
+        scrollView.minMagnification = 0.1
+
+        let hostingView = NSHostingView(rootView: content)
+        hostingView.translatesAutoresizingMaskIntoConstraints = false
+        scrollView.documentView = hostingView
+
+        return scrollView
+    }
+
+    func updateNSView(_ nsView: NSScrollView, context _: Context) {
+        if let hostingView = nsView.documentView as? NSHostingView<Content> {
+            hostingView.rootView = content
         }
     }
 }
@@ -155,27 +157,31 @@ struct ConnectionLinesView: View {
     }
 
     private func drawLines(for devices: [USBDevice], to parentID: String, in context: inout GraphicsContext) {
-        guard let parentAnchor = anchors.first(where: { $0.id == parentID }) else { return }
-        let p2 = proxy[parentAnchor.center]
+        guard let parentAnchor = anchors.first(where: { $0.id == parentID }),
+              let p2Anchor = parentAnchor.leadingAnchor else { return }
+
+        let p2 = proxy[p2Anchor]
 
         for device in devices {
-            if let deviceAnchor = anchors.first(where: { $0.id == device.id }) {
-                let p1 = proxy[deviceAnchor.center]
+            if let deviceAnchor = anchors.first(where: { $0.id == device.id }),
+               let p1Anchor = deviceAnchor.trailingAnchor {
+                let p1 = proxy[p1Anchor]
 
                 var path = Path()
                 path.move(to: p1)
 
-                // Beautiful cubic bezier for the "cable"
-                let control1 = CGPoint(x: p1.x + (p2.x - p1.x) / 2, y: p1.y)
-                let control2 = CGPoint(x: p1.x + (p2.x - p1.x) / 2, y: p2.y)
+                // Horizontal offset for the curve
+                let distance = p2.x - p1.x
+                let control1 = CGPoint(x: p1.x + distance * 0.4, y: p1.y)
+                let control2 = CGPoint(x: p1.x + distance * 0.6, y: p2.y)
                 path.addCurve(to: p2, control1: control1, control2: control2)
 
-                let color = device.isBottlenecked ? Color.red : Color.gray.opacity(0.4)
+                let color = device.isBottlenecked ? Color.red : Color.gray.opacity(0.3)
                 let thickness = lineThickness(for: device.negotiatedSpeedMbps)
 
                 context.stroke(path, with: .color(color), lineWidth: thickness)
 
-                // Recurse for children
+                // Recurse
                 drawLines(for: device.children, to: device.id, in: &context)
             }
         }
@@ -196,7 +202,7 @@ struct ConnectionLinesView: View {
 struct DeviceTreeBranch: View {
     let device: USBDevice
     var body: some View {
-        HStack(alignment: .center, spacing: 100) {
+        HStack(alignment: .center, spacing: 120) {
             if !device.children.isEmpty {
                 VStack(alignment: .trailing, spacing: 30) {
                     ForEach(device.children) { child in
@@ -205,8 +211,11 @@ struct DeviceTreeBranch: View {
                 }
             }
             DeviceCardView(device: device)
-                .anchorPreference(key: DeviceAnchorKey.self, value: .center) {
-                    [DeviceAnchorData(id: device.id, center: $0)]
+                .anchorPreference(key: DeviceAnchorKey.self, value: .trailing) {
+                    [DeviceAnchorData(id: device.id, leadingAnchor: nil, trailingAnchor: $0)]
+                }
+                .anchorPreference(key: DeviceAnchorKey.self, value: .leading) {
+                    [DeviceAnchorData(id: device.id, leadingAnchor: $0, trailingAnchor: nil)]
                 }
         }
     }
@@ -261,23 +270,18 @@ struct DeviceCardView: View {
 struct HostMacBookNode: View {
     var body: some View {
         ZStack {
-            // Body
+            // Unified Chassis
             RoundedRectangle(cornerRadius: 24)
-                .fill(LinearGradient(colors: [Color(white: 0.35), Color(white: 0.2)], startPoint: .top, endPoint: .bottom))
+                .fill(LinearGradient(colors: [Color(white: 0.35), Color(white: 0.25)], startPoint: .top, endPoint: .bottom))
                 .frame(width: 360, height: 260)
                 .overlay(RoundedRectangle(cornerRadius: 24).stroke(Color.white.opacity(0.15), lineWidth: 1.5))
-                .shadow(color: .black.opacity(0.4), radius: 20, y: 10)
+                .shadow(color: .black.opacity(0.4), radius: 30, y: 15)
 
             // Screen
             RoundedRectangle(cornerRadius: 12)
                 .fill(Color.black)
                 .frame(width: 320, height: 150)
                 .offset(y: -30)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 12)
-                        .stroke(Color.white.opacity(0.05), lineWidth: 1)
-                        .offset(y: -30)
-                )
                 .overlay(
                     Circle().fill(Color.blue.opacity(0.1)).blur(radius: 30).frame(width: 150).offset(y: -30)
                 )
