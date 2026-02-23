@@ -31,6 +31,8 @@ class DeviceViewModel: ObservableObject {
 
 struct ContentView: View {
     @ObservedObject var viewModel: DeviceViewModel
+    @State private var zoomScale: CGFloat = 1.0
+    @GestureState private var magnifyBy = 1.0
 
     var body: some View {
         ZStack {
@@ -48,7 +50,7 @@ struct ContentView: View {
                                     // Line into host
                                     Rectangle()
                                         .fill(device.isBottlenecked ? Color.red : Color.gray.opacity(0.8))
-                                        .frame(width: 40, height: lineThickness(for: device.negotiatedSpeedMbps))
+                                        .frame(width: 60, height: lineThickness(for: device.negotiatedSpeedMbps))
                                 }
                             }
                         }
@@ -57,11 +59,21 @@ struct ContentView: View {
 
                     // Host MacBook graphic (right side)
                     HostMacBookNode()
-                        .padding(.trailing, 100)
+                        .padding(.trailing, 200)
                 }
-                .padding(40)
-                .frame(minWidth: 1000, minHeight: 800, alignment: .trailing)
+                .padding(100)
+                .scaleEffect(zoomScale * magnifyBy)
+                .frame(minWidth: 1400, minHeight: 1000, alignment: .trailing)
             }
+            .gesture(
+                MagnificationGesture()
+                    .updating($magnifyBy) { value, state, _ in
+                        state = value
+                    }
+                    .onEnded { value in
+                        zoomScale *= value
+                    }
+            )
 
             // Legend Overlay (Bottom Left)
             VStack {
@@ -71,6 +83,33 @@ struct ContentView: View {
                         .padding(30)
                     Spacer()
                 }
+            }
+
+            // Zoom Controls
+            VStack {
+                HStack {
+                    Spacer()
+                    HStack(spacing: 0) {
+                        Button(action: { zoomScale = max(0.2, zoomScale - 0.1) }) {
+                            Image(systemName: "minus.magnifyingglass")
+                        }
+                        Divider().frame(height: 12).padding(.horizontal, 8)
+                        Button(action: { zoomScale = 1.0 }) {
+                            Text("\(Int(zoomScale * 100))%")
+                                .font(.system(size: 11, design: .monospaced))
+                        }
+                        Divider().frame(height: 12).padding(.horizontal, 8)
+                        Button(action: { zoomScale = min(3.0, zoomScale + 0.1) }) {
+                            Image(systemName: "plus.magnifyingglass")
+                        }
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(Capsule().fill(Color(NSColor.controlBackgroundColor).opacity(0.8)))
+                    .overlay(Capsule().stroke(Color.gray.opacity(0.2), lineWidth: 1))
+                    .padding(20)
+                }
+                Spacer()
             }
         }
         .toolbar {
@@ -213,21 +252,24 @@ struct HostMacBookNode: View {
         ZStack {
             // Body
             RoundedRectangle(cornerRadius: 16)
-                .fill(Color(NSColor.systemGray).opacity(0.8))
+                .fill(Color(NSColor.controlAccentColor).opacity(0.1))
+                .background(RoundedRectangle(cornerRadius: 16).fill(Color.gray.opacity(0.4)))
                 .frame(width: 250, height: 180)
-                .shadow(color: .black.opacity(0.2), radius: 10, x: 0, y: 5)
+                .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.gray.opacity(0.5), lineWidth: 2))
+                .shadow(color: .black.opacity(0.3), radius: 15, x: 0, y: 8)
 
             // Keyboard well
             RoundedRectangle(cornerRadius: 8)
-                .fill(Color(NSColor.darkGray).opacity(0.6))
+                .fill(Color.black.opacity(0.3))
                 .frame(width: 210, height: 90)
                 .offset(y: -25)
 
             // Trackpad
             RoundedRectangle(cornerRadius: 6)
-                .fill(Color(NSColor.darkGray).opacity(0.5))
+                .fill(Color.black.opacity(0.2))
                 .frame(width: 90, height: 50)
                 .offset(y: 55)
+                .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.white.opacity(0.1), lineWidth: 1).offset(y: 55))
 
             // Ports on left edge
             VStack(spacing: 30) {
