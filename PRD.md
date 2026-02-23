@@ -1,7 +1,7 @@
-# Product Requirements Document: USB Inspector (macOS)
+# Product Requirements Document: C-Through (macOS)
 
 ## 1. Executive Summary
-**USB Inspector** is a native macOS utility that visualizes the complex topology of connected USB and Thunderbolt devices. By translating raw IOKit system data into a high-fidelity, interactive node-link diagram, it allows users to instantly understand how their peripherals are connected, what speeds they are negotiating, and—crucially—identify performance bottlenecks caused by inadequate cables or hubs.
+**C-Through** is a native macOS utility that visualizes the complex topology of connected USB and Thunderbolt devices. By translating raw IOKit system data into a high-fidelity, interactive node-link diagram, it allows users to instantly understand how their peripherals are connected, what speeds they are negotiating, and—crucially—identify performance bottlenecks caused by inadequate cables or hubs.
 
 ## 2. Target Audience
 *   **Creative Professionals:** Video editors, musicians, and photographers managing high-speed external storage arrays, displays, and audio interfaces.
