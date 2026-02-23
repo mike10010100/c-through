@@ -1,0 +1,27 @@
+# OS X
+.DS_Store
+
+# Xcode
+build/
+DerivedData/
+*.swp
+*.lock
+*.mode1v3
+*.mode2v3
+*.perspectivev3
+*.pbxuser
+xcuserdata/
+*.xcworkspace/
+!default.xcworkspace
+*.xcuserstate
+*.xccheckout
+*.xcscmblueprint
+
+# Swift Package Manager
+.build/
+.swiftpm/
+Packages/
+Package.resolved
+
+# Unit Tests
+*.xctest/
