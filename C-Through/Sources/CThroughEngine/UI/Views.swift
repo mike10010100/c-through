@@ -7,7 +7,7 @@ import SwiftUI
 public struct DeviceAnchorData: Equatable {
     public let id: String
     public var bounds: Anchor<CGRect>
-    
+
     public init(id: String, bounds: Anchor<CGRect>) {
         self.id = id
         self.bounds = bounds
@@ -48,36 +48,39 @@ public struct ContentView: View {
         ZStack {
             Color(NSColor.windowBackgroundColor).ignoresSafeArea()
 
-            // THE BULLETPROOF NATIVE ZOOM: NSScrollView wrapper
-            // This is the ONLY way to get native macOS pinch-to-zoom and scroll-zoom.
-            NativeZoomableCanvas {
-                ZStack {
-                    // Huge clear background to define coordinate space
-                    Color.clear.frame(width: 4000, height: 3000)
-                    
-                    // THE CONTENT
-                    HStack(alignment: .center, spacing: 200) {
-                        VStack(alignment: .trailing, spacing: 80) {
-                            if viewModel.devices.isEmpty {
-                                Text("No USB devices found.").foregroundColor(.secondary)
-                            } else {
-                                ForEach(viewModel.devices) { device in
-                                    DeviceTreeBranch(device: device)
+            GeometryReader { proxy in
+                NativeZoomableCanvas {
+                    ZStack {
+                        // Dynamically size to at least the window, but allow expanding
+                        Color.clear.frame(
+                            minWidth: proxy.size.width,
+                            minHeight: proxy.size.height
+                        )
+
+                        // THE CONTENT
+                        HStack(alignment: .center, spacing: 200) {
+                            VStack(alignment: .trailing, spacing: 80) {
+                                if viewModel.devices.isEmpty {
+                                    Text("No USB devices found.").foregroundColor(.secondary)
+                                } else {
+                                    ForEach(viewModel.devices) { device in
+                                        DeviceTreeBranch(device: device)
+                                    }
                                 }
                             }
-                        }
 
-                        HostMacBookNode()
-                            .anchorPreference(key: DeviceAnchorKey.self, value: .bounds) {
-                                [DeviceAnchorData(id: "HOST", bounds: $0)]
-                            }
+                            HostMacBookNode()
+                                .anchorPreference(key: DeviceAnchorKey.self, value: .bounds) {
+                                    [DeviceAnchorData(id: "HOST", bounds: $0)]
+                                }
+                        }
                     }
-                }
-                // IMPORTANT: Connection lines must be drawn INSIDE the hosting view 
-                // so they share the same anchor resolution coordinate space.
-                .backgroundPreferenceValue(DeviceAnchorKey.self) { anchors in
-                    GeometryReader { proxy in
-                        ConnectionLinesView(anchors: anchors, devices: viewModel.devices, proxy: proxy)
+                    // Generous padding creates the "infinite canvas" feel around the content
+                    .padding(1000)
+                    .backgroundPreferenceValue(DeviceAnchorKey.self) { anchors in
+                        GeometryReader { geo in
+                            ConnectionLinesView(anchors: anchors, devices: viewModel.devices, proxy: geo)
+                        }
                     }
                 }
             }
@@ -112,34 +115,31 @@ public struct ContentView: View {
 // MARK: - Native Zoomable Canvas (The Core fix)
 
 struct NativeZoomableCanvas<Content: View>: NSViewRepresentable {
-    let content: Content
-
-    init(@ViewBuilder content: () -> Content) {
-        self.content = content()
-    }
+    @ViewBuilder let content: Content
 
     func makeNSView(context _: Context) -> NSScrollView {
         let scrollView = NSScrollView()
-        scrollView.hasVerticalScroller = true
-        scrollView.hasHorizontalScroller = true
-        scrollView.allowsMagnification = true // THIS enables pinch-to-zoom
+        // Best practice: hide scroll indicators for an "infinite canvas" feel like Freeform/Figma
+        scrollView.hasVerticalScroller = false
+        scrollView.hasHorizontalScroller = false
+
+        scrollView.allowsMagnification = true // Natively handles trackpad pinch & Cmd+Scroll
         scrollView.magnification = 1.0
-        scrollView.maxMagnification = 10.0
-        scrollView.minMagnification = 0.1
+        scrollView.maxMagnification = 5.0
+        scrollView.minMagnification = 0.2
         scrollView.drawsBackground = false
-        
+
         let hostingView = NSHostingView(rootView: content)
         hostingView.translatesAutoresizingMaskIntoConstraints = false
-        // Fixed massive frame for the internal content
-        hostingView.frame = NSRect(x: 0, y: 0, width: 4000, height: 3000)
         scrollView.documentView = hostingView
-        
+
         // Scroll to center initially so the user starts at the MacBook
         DispatchQueue.main.async {
-            let contentSize = hostingView.frame.size
+            hostingView.layoutSubtreeIfNeeded()
+            let contentSize = hostingView.bounds.size
             let visibleSize = scrollView.contentView.bounds.size
             let scrollPoint = NSPoint(x: (contentSize.width - visibleSize.width) / 2 + 500,
-                                     y: (contentSize.height - visibleSize.height) / 2)
+                                      y: (contentSize.height - visibleSize.height) / 2)
             scrollView.contentView.scroll(to: scrollPoint)
         }
 
@@ -297,19 +297,19 @@ struct HostMacBookNode: View {
                             RoundedRectangle(cornerRadius: 14).stroke(Color.white.opacity(0.1), lineWidth: 1)
                         }
                     )
-                
+
                 // Keyboard area well
                 RoundedRectangle(cornerRadius: 8)
                     .fill(Color.black.opacity(0.5))
                     .frame(width: 320, height: 50)
-                
+
                 // Trackpad
                 RoundedRectangle(cornerRadius: 6)
                     .fill(Color.white.opacity(0.05))
                     .frame(width: 140, height: 40)
             }
             .offset(y: -10)
-            
+
             // Physical Port Indents on the left
             VStack(spacing: 40) {
                 Capsule().fill(Color.black).frame(width: 6, height: 22)
