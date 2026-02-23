@@ -1,29 +1,30 @@
 # AGENTS.md
 
-This file provides coordination guidance for AI agents working on the **C-Through** project. It outlines the project's technical philosophy, key constraints, and workflow.
+This file provides coordination guidance for AI agents working on the **C-Through** project. It outlines the project's technical philosophy, key constraints, and critical UI architecture.
 
 ## Project Vision
 **C-Through** aims to be a high-fidelity, native macOS utility for debugging USB-C and Thunderbolt topology. It prioritizes clarity and "see-through" transparency into hardware link speeds.
 
 ## Technical Philosophy
-1.  **Native First**: Avoid non-native dependencies (like Rust/C++ bridges) where possible. Prefer Swift and Apple's **IOKit** framework for system data.
-2.  **SwiftUI**: All UI should be built using modern SwiftUI protocols and layouts. Use a custom layout engine for the topology graph to ensure performance and flexibility.
-3.  **Test-Driven Development**: Maintain >90% code coverage. All new logic in the `CThroughEngine` must be unit-tested using `XCTest`.
-4.  **Hardware-Agnostic Engine**: Design the `USBExplorerProtocol` so that the engine can be tested with mock data without requiring physical hardware.
-5.  **Clean Code**: Adhere strictly to the rules in `.swiftlint.yml` and `.swiftformat`.
+1.  **Native First**: Prefer Swift and Apple's **IOKit** framework. Avoid non-native dependencies.
+2.  **Native Interaction**: The canvas MUST feel like a native macOS creative tool (Freeform/Figma). Use `NSScrollView` wrappers where SwiftUI's standard `ScrollView` fails to provide native magnification or momentum.
+3.  **Visual Verification**: GUI changes should be verified using the automated snapshot testing suite (`UISnapshotTests.swift`) to prevent "blind" development.
+4.  **Test-Driven Development**: Maintain >90% code coverage in the `CThroughEngine`.
 
 ## Key Files & Modules
-- `PRD.md`: The single source of truth for features and user needs.
-- `Sources/CThroughEngine/Services/USBExplorer.swift`: The IOKit implementation for device discovery.
-- `Sources/CThroughEngine/Models/USBDevice.swift`: The core model representing the device tree and bottleneck logic.
-- `Sources/C-Through/CThroughApp.swift`: The main SwiftUI application entry point.
+- `Sources/CThroughEngine/Services/USBExplorer.swift`: The IOKit implementation. Uses registry entry IDs to map parents to children accurately.
+- `Sources/CThroughEngine/UI/Views.swift`: The unified UI library. 
+  - `NSZoomableScrollView`: Wraps `NSScrollView` to enable pinch-to-zoom and Command-Scroll magnification.
+  - `ConnectionLinesView`: Uses a `Canvas` and `AnchorPreferences` to draw lines behind nodes.
+- `Tests/CThroughEngineTests/UISnapshotTests.swift`: Generates PNGs for visual inspection of the layout.
+
+## Critical UI Constraints
+- **Anchor Resolution**: Connection lines rely on `AnchorPreference` with `.bounds`. To ensure these resolve correctly, lines must be drawn in a layer that shares the same coordinate space as the nodes (usually inside the `ZStack` within the scrollable content).
+- **Infinite Canvas**: The canvas uses a combination of `GeometryReader` and generous padding (`.padding(1000)`) to ensure the user can pan beyond the edges of the tree.
+- **Layering**: Always draw connection lines in the `background` layer of nodes to prevent them from obscuring text or icons.
 
 ## Workflow for Agents
-1.  **Research**: Use `ioreg -p IOUSB` to understand the local USB tree before modifying the `USBExplorer`.
-2.  **Strategy**: Propose changes based on the PRD before implementation.
-3.  **Validate**: Always run `swift test` and `swiftlint` after any code change.
+1.  **Research**: Use `ioreg -p IOUSB` to understand the local USB tree.
+2.  **Snapshot First**: When modifying the UI, run the snapshot tests and inspect the output image before declaring the task complete.
+3.  **Validate**: Always run `swift test` and `swiftlint` after any change.
 4.  **Commit**: Use descriptive, conventional commit messages.
-
-## Known Challenges
-- **SuperSpeed Descriptors**: Parsing the full binary descriptor for maximum capability requires careful use of `IORegistryEntryCreateCFProperty` and pointer management.
-- **Topology Hierarchy**: Correctly mapping hub-to-port-to-device relationships in IOKit requires recursive traversal of the `IOService` plane.
