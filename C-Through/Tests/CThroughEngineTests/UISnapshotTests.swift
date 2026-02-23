@@ -45,8 +45,8 @@ final class UISnapshotTests: XCTestCase {
                         }
                     }
                     HostMacBookNode()
-                        .anchorPreference(key: DeviceAnchorKey.self, value: .leading) {
-                            [DeviceAnchorData(id: "HOST", leading: $0)]
+                        .anchorPreference(key: DeviceAnchorKey.self, value: .bounds) {
+                            [DeviceAnchorData(id: "HOST", bounds: $0)]
                         }
                 }
                 .padding(200)

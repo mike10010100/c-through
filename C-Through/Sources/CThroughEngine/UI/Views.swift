@@ -6,27 +6,13 @@ import SwiftUI
 
 public struct DeviceAnchorData: Equatable {
     public let id: String
-    public var leading: Anchor<CGPoint>?
-    public var trailing: Anchor<CGPoint>?
-
-    public init(id: String, leading: Anchor<CGPoint>? = nil, trailing: Anchor<CGPoint>? = nil) {
-        self.id = id
-        self.leading = leading
-        self.trailing = trailing
-    }
+    public let bounds: Anchor<CGRect>
 }
 
 public struct DeviceAnchorKey: PreferenceKey {
     public static var defaultValue: [DeviceAnchorData] = []
     public static func reduce(value: inout [DeviceAnchorData], nextValue: () -> [DeviceAnchorData]) {
-        for next in nextValue() {
-            if let index = value.firstIndex(where: { $0.id == next.id }) {
-                if let l = next.leading { value[index].leading = l }
-                if let t = next.trailing { value[index].trailing = t }
-            } else {
-                value.append(next)
-            }
-        }
+        value.append(contentsOf: nextValue())
     }
 }
 
@@ -48,6 +34,7 @@ public class DeviceViewModel: ObservableObject {
 
 public struct ContentView: View {
     @ObservedObject var viewModel: DeviceViewModel
+    @State private var zoomScale: CGFloat = 1.0
 
     public init(viewModel: DeviceViewModel) {
         self.viewModel = viewModel
@@ -57,11 +44,12 @@ public struct ContentView: View {
         ZStack {
             Color(NSColor.windowBackgroundColor).ignoresSafeArea()
 
-            NSZoomableScrollView {
+            // Pure SwiftUI panning and zooming
+            ScrollView([.horizontal, .vertical], showsIndicators: true) {
                 ZStack {
-                    // Content Layer (defining anchors)
-                    HStack(alignment: .center, spacing: 200) {
-                        VStack(alignment: .trailing, spacing: 80) {
+                    // Content Layer
+                    HStack(alignment: .center, spacing: 100) {
+                        VStack(alignment: .trailing, spacing: 40) {
                             if viewModel.devices.isEmpty {
                                 Text("No USB devices found.").foregroundColor(.secondary)
                             } else {
@@ -72,25 +60,35 @@ public struct ContentView: View {
                         }
 
                         HostMacBookNode()
-                            .anchorPreference(key: DeviceAnchorKey.self, value: .leading) {
-                                [DeviceAnchorData(id: "HOST", leading: $0)]
+                            .anchorPreference(key: DeviceAnchorKey.self, value: .bounds) {
+                                [DeviceAnchorData(id: "HOST", bounds: $0)]
                             }
                     }
-                    .padding(600)
+                    .padding(300) // Padding so it's pannable
                 }
                 .backgroundPreferenceValue(DeviceAnchorKey.self) { anchors in
-                    // Connection Lines (Drawn behind nodes)
+                    // Connection Lines (Drawn strictly behind nodes)
                     GeometryReader { proxy in
                         ConnectionLinesView(anchors: anchors, devices: viewModel.devices, proxy: proxy)
                     }
                 }
+                .scaleEffect(zoomScale)
+                // Frame ensures the scrollview content size accommodates the scaled view
+                .frame(minWidth: 1500, minHeight: 1200)
             }
+            .gesture(
+                MagnificationGesture()
+                    .onChanged { value in
+                        let newScale = value.magnitude
+                        zoomScale = max(0.2, min(newScale, 3.0))
+                    }
+            )
 
             // Overlays
             VStack {
                 Spacer()
-                HStack {
-                    LegendBox().padding(40)
+                HStack(alignment: .bottom) {
+                    LegendBox().padding(30)
                     Spacer()
                 }
             }
@@ -113,45 +111,6 @@ public struct ContentView: View {
     }
 }
 
-// MARK: - Native Zoomable ScrollView
-
-public struct NSZoomableScrollView<Content: View>: NSViewRepresentable {
-    public let content: Content
-
-    public init(@ViewBuilder content: () -> Content) {
-        self.content = content()
-    }
-
-    public func makeNSView(context _: Context) -> NSScrollView {
-        let scrollView = NSScrollView()
-        scrollView.hasVerticalScroller = true
-        scrollView.hasHorizontalScroller = true
-        scrollView.allowsMagnification = true
-        scrollView.magnification = 1.0
-        scrollView.maxMagnification = 10.0
-        scrollView.minMagnification = 0.1
-        scrollView.drawsBackground = false
-
-        let hostingView = NSHostingView(rootView: content)
-        hostingView.translatesAutoresizingMaskIntoConstraints = false
-        scrollView.documentView = hostingView
-
-        // Use proper constraints to allow scrolling
-        hostingView.topAnchor.constraint(equalTo: scrollView.contentView.topAnchor).isActive = true
-        hostingView.leftAnchor.constraint(equalTo: scrollView.contentView.leftAnchor).isActive = true
-        hostingView.widthAnchor.constraint(greaterThanOrEqualToConstant: 4000).isActive = true
-        hostingView.heightAnchor.constraint(greaterThanOrEqualToConstant: 3000).isActive = true
-
-        return scrollView
-    }
-
-    public func updateNSView(_ nsView: NSScrollView, context _: Context) {
-        if let hostingView = nsView.documentView as? NSHostingView<Content> {
-            hostingView.rootView = content
-        }
-    }
-}
-
 // MARK: - Connections
 
 struct ConnectionLinesView: View {
@@ -167,19 +126,20 @@ struct ConnectionLinesView: View {
     }
 
     private func drawLines(for devices: [USBDevice], to parentID: String, in context: inout GraphicsContext) {
-        guard let parentAnchorData = anchors.first(where: { $0.id == parentID }),
-              let p2Anchor = parentAnchorData.leading else { return }
+        guard let parentAnchorData = anchors.first(where: { $0.id == parentID }) else { return }
 
-        let p2 = proxy[p2Anchor]
+        let p2Rect = proxy[parentAnchorData.bounds]
+        let p2 = CGPoint(x: p2Rect.minX, y: p2Rect.midY) // Leading edge of parent
 
         for device in devices {
-            if let deviceAnchorData = anchors.first(where: { $0.id == device.id }),
-               let p1Anchor = deviceAnchorData.trailing {
-                let p1 = proxy[p1Anchor]
+            if let deviceAnchorData = anchors.first(where: { $0.id == device.id }) {
+                let p1Rect = proxy[deviceAnchorData.bounds]
+                let p1 = CGPoint(x: p1Rect.maxX, y: p1Rect.midY) // Trailing edge of child
 
                 var path = Path()
                 path.move(to: p1)
 
+                // Smooth organic curve
                 let diff = p2.x - p1.x
                 let control1 = CGPoint(x: p1.x + diff * 0.4, y: p1.y)
                 let control2 = CGPoint(x: p1.x + diff * 0.6, y: p2.y)
@@ -210,20 +170,17 @@ struct ConnectionLinesView: View {
 struct DeviceTreeBranch: View {
     let device: USBDevice
     var body: some View {
-        HStack(alignment: .center, spacing: 150) {
+        HStack(alignment: .center, spacing: 100) {
             if !device.children.isEmpty {
-                VStack(alignment: .trailing, spacing: 40) {
+                VStack(alignment: .trailing, spacing: 20) {
                     ForEach(device.children) { child in
                         DeviceTreeBranch(device: child)
                     }
                 }
             }
             DeviceCardView(device: device)
-                .anchorPreference(key: DeviceAnchorKey.self, value: .trailing) {
-                    [DeviceAnchorData(id: device.id, trailing: $0)]
-                }
-                .anchorPreference(key: DeviceAnchorKey.self, value: .leading) {
-                    [DeviceAnchorData(id: device.id, leading: $0)]
+                .anchorPreference(key: DeviceAnchorKey.self, value: .bounds) {
+                    [DeviceAnchorData(id: device.id, bounds: $0)]
                 }
         }
     }
@@ -236,30 +193,30 @@ struct DeviceCardView: View {
             ZStack {
                 RoundedRectangle(cornerRadius: 10)
                     .fill(Color.blue)
-                    .frame(width: 48, height: 48)
+                    .frame(width: 44, height: 44)
                 Image(systemName: iconFor(device))
-                    .font(.system(size: 22))
+                    .font(.system(size: 20))
                     .foregroundColor(.white)
             }
-            .padding(12)
+            .padding(10)
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(device.name).font(.system(size: 14, weight: .bold)).lineLimit(1)
+                Text(device.name).font(.system(size: 13, weight: .bold)).lineLimit(1)
                 if let mfr = device.manufacturer {
                     Text(mfr).font(.system(size: 11)).foregroundColor(.secondary).lineLimit(1)
                 }
             }
-            Spacer(minLength: 40)
+            Spacer(minLength: 20)
             if let speed = device.negotiatedSpeedMbps {
                 Text("\(Int(speed))").font(.system(size: 10, design: .monospaced))
                     .foregroundColor(device.isBottlenecked ? .red : .secondary)
-                    .padding(.trailing, 15)
+                    .padding(.trailing, 12)
             }
         }
-        .frame(width: 280, height: 70)
-        .background(RoundedRectangle(cornerRadius: 14).fill(Color(NSColor.controlBackgroundColor)))
-        .overlay(RoundedRectangle(cornerRadius: 14).stroke(device.isBottlenecked ? Color.red : Color.white.opacity(0.1), lineWidth: device.isBottlenecked ? 2 : 1))
-        .shadow(color: .black.opacity(0.2), radius: 8, y: 4)
+        .frame(width: 260, height: 64)
+        .background(RoundedRectangle(cornerRadius: 12).fill(Color(NSColor.controlBackgroundColor)))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(device.isBottlenecked ? Color.red : Color.gray.opacity(0.15), lineWidth: device.isBottlenecked ? 2 : 1))
+        .shadow(color: .black.opacity(0.15), radius: 6, y: 3)
     }
 
     private func iconFor(_ device: USBDevice) -> String {
@@ -278,43 +235,31 @@ struct DeviceCardView: View {
 struct HostMacBookNode: View {
     var body: some View {
         ZStack {
-            // Main Chassis
-            RoundedRectangle(cornerRadius: 24)
-                .fill(LinearGradient(colors: [Color(white: 0.35), Color(white: 0.25)], startPoint: .top, endPoint: .bottom))
-                .frame(width: 380, height: 260)
-                .overlay(RoundedRectangle(cornerRadius: 24).stroke(Color.white.opacity(0.15), lineWidth: 1.5))
-                .shadow(color: .black.opacity(0.4), radius: 30, y: 15)
+            // Main Chassis - clean, non-glowing silver/space gray design
+            RoundedRectangle(cornerRadius: 16)
+                .fill(Color(NSColor.systemGray))
+                .frame(width: 300, height: 210)
+                .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.white.opacity(0.2), lineWidth: 1))
+                .shadow(color: .black.opacity(0.3), radius: 15, y: 8)
 
-            VStack(spacing: 15) {
-                // Screen Area
-                ZStack {
-                    RoundedRectangle(cornerRadius: 12)
-                        .fill(Color.black)
-                        .frame(width: 340, height: 140)
+            // Keyboard area well
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color(NSColor.darkGray))
+                .frame(width: 260, height: 90)
+                .offset(y: -25)
 
-                    Circle().fill(Color.blue.opacity(0.1)).blur(radius: 30).frame(width: 150)
-
-                    RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.05), lineWidth: 1)
-                }
-
-                // Keyboard area well
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(Color.black.opacity(0.3))
-                    .frame(width: 300, height: 45)
-
-                // Trackpad
-                RoundedRectangle(cornerRadius: 4)
-                    .fill(Color.white.opacity(0.03))
-                    .frame(width: 110, height: 35)
+            // Trackpad
+            RoundedRectangle(cornerRadius: 6)
+                .fill(Color(NSColor.darkGray).opacity(0.8))
+                .frame(width: 100, height: 45)
+                .offset(y: 60)
+            
+            // Physical Port Indents on the left
+            VStack(spacing: 20) {
+                Capsule().fill(Color.black.opacity(0.8)).frame(width: 6, height: 16)
+                Capsule().fill(Color.black.opacity(0.8)).frame(width: 6, height: 16)
             }
-            .padding(.top, 10)
-
-            // Ports
-            VStack(spacing: 30) {
-                Capsule().fill(Color.black).frame(width: 5, height: 18)
-                Capsule().fill(Color.black).frame(width: 5, height: 18)
-            }
-            .offset(x: -188, y: -20)
+            .offset(x: -150, y: -20)
         }
     }
 }
