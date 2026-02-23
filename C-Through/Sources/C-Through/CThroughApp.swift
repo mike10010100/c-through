@@ -8,7 +8,7 @@ struct CThroughApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView(viewModel: viewModel)
-                .frame(minWidth: 1000, minHeight: 800)
+                .frame(minWidth: 1100, minHeight: 800)
                 .background(Color(NSColor.windowBackgroundColor))
         }
         .windowStyle(.hiddenTitleBar)
@@ -32,90 +32,85 @@ class DeviceViewModel: ObservableObject {
 struct ContentView: View {
     @ObservedObject var viewModel: DeviceViewModel
     @State private var zoomScale: CGFloat = 1.0
-    @GestureState private var magnifyBy = 1.0
+    @State private var offset: CGSize = .zero
+    @State private var lastOffset: CGSize = .zero
 
     var body: some View {
         ZStack {
-            ScrollView([.horizontal, .vertical]) {
-                HStack(alignment: .center, spacing: 0) {
-                    // Devices and Hubs
-                    VStack(alignment: .trailing, spacing: 60) {
-                        if viewModel.devices.isEmpty {
-                            VStack {
-                                Text("No USB devices found.")
-                                    .font(.title3)
-                                    .foregroundColor(.secondary)
-                                Button("Try Refreshing") { viewModel.refresh() }
-                                    .buttonStyle(.link)
-                            }
-                        } else {
-                            ForEach(viewModel.devices) { device in
-                                HStack(spacing: 0) {
-                                    DeviceTreeBranch(device: device)
-                                    
-                                    // Connection into the host
-                                    TreeLine(isBottlenecked: device.isBottlenecked, speed: device.negotiatedSpeedMbps)
-                                        .frame(width: 80, height: 100)
+            // Main Canvas Area
+            GeometryReader { _ in
+                ZStack {
+                    Color(NSColor.windowBackgroundColor).ignoresSafeArea()
+
+                    // The Diagram Content
+                    Group {
+                        HStack(alignment: .center, spacing: 100) {
+                            // Tree of Devices
+                            VStack(alignment: .trailing, spacing: 50) {
+                                if viewModel.devices.isEmpty {
+                                    Text("No USB devices found.").foregroundColor(.secondary)
+                                } else {
+                                    ForEach(viewModel.devices) { device in
+                                        DeviceTreeBranch(device: device)
+                                    }
                                 }
                             }
+
+                            // The Host
+                            HostMacBookNode()
                         }
                     }
-                    .padding(.leading, 150)
-
-                    // Host MacBook graphic (right side)
-                    HostMacBookNode()
-                        .padding(.trailing, 150)
+                    .scaleEffect(zoomScale)
+                    .offset(x: offset.width, y: offset.height)
                 }
-                .padding(100)
-                .scaleEffect(zoomScale * magnifyBy)
-                .frame(minWidth: 1600, minHeight: 1200, alignment: .trailing)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .contentShape(Rectangle())
+                // Panning Gesture
+                .gesture(
+                    DragGesture()
+                        .onChanged { value in
+                            offset = CGSize(
+                                width: lastOffset.width + value.translation.width,
+                                height: lastOffset.height + value.translation.height
+                            )
+                        }
+                        .onEnded { _ in
+                            lastOffset = offset
+                        }
+                )
+                // Zoom Gesture
+                .gesture(
+                    MagnificationGesture()
+                        .onChanged { value in
+                            zoomScale = value.magnitude
+                        }
+                )
             }
-            .background(Color(NSColor.windowBackgroundColor))
-            .gesture(
-                MagnificationGesture()
-                    .updating($magnifyBy) { value, state, _ in
-                        state = value
-                    }
-                    .onEnded { value in
-                        zoomScale *= value
-                    }
-            )
 
             // Legend Overlay (Bottom Left)
             VStack {
                 Spacer()
                 HStack {
                     LegendBox()
-                        .padding(40)
+                        .padding(30)
                     Spacer()
                 }
             }
-            
-            // Subtle Zoom Indicator (Top Right)
-            if zoomScale != 1.0 {
-                VStack {
-                    HStack {
-                        Spacer()
-                        Text("\(Int(zoomScale * 100))%")
-                            .font(.system(size: 11, weight: .bold, design: .monospaced))
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(Capsule().fill(Color.black.opacity(0.3)))
-                            .foregroundColor(.white.opacity(0.8))
-                            .padding(20)
+
+            // Floating Refresh Button
+            VStack {
+                HStack {
+                    Spacer()
+                    Button(action: viewModel.refresh) {
+                        Image(systemName: "arrow.clockwise")
+                            .font(.system(size: 14, weight: .bold))
+                            .padding(10)
+                            .background(Circle().fill(.ultraThinMaterial))
                     }
-                    Spacer()
+                    .buttonStyle(.plain)
+                    .padding(30)
                 }
-            }
-        }
-        .toolbar {
-            ToolbarItem(placement: .navigation) {
-                Text("C-Through").font(.headline)
-            }
-            ToolbarItem {
-                Button(action: viewModel.refresh) {
-                    Label("Refresh", systemImage: "arrow.clockwise")
-                }
+                Spacer()
             }
         }
     }
@@ -126,59 +121,52 @@ struct DeviceTreeBranch: View {
 
     var body: some View {
         HStack(alignment: .center, spacing: 0) {
-            // Children of this Hub (to the left)
+            // Children to the left
             if !device.children.isEmpty {
-                VStack(alignment: .trailing, spacing: 24) {
+                VStack(alignment: .trailing, spacing: 20) {
                     ForEach(device.children) { child in
                         HStack(spacing: 0) {
                             DeviceTreeBranch(device: child)
-                            
-                            // Horizontal line out of child
-                            TreeLine(isBottlenecked: child.isBottlenecked, speed: child.negotiatedSpeedMbps)
-                                .frame(width: 40, height: 20)
+                            ConnectorLine(isBottlenecked: child.isBottlenecked, speed: child.negotiatedSpeedMbps)
+                                .frame(width: 40)
                         }
                     }
                 }
-                
-                // Vertical trunk connecting all children
-                ZStack(alignment: .trailing) {
-                    Rectangle()
-                        .fill(Color.gray.opacity(0.5))
-                        .frame(width: 4)
-                        .padding(.vertical, 30)
-                    
-                    // Line into the parent hub
-                    Rectangle()
-                        .fill(Color.gray.opacity(0.5))
-                        .frame(width: 30, height: 4)
-                }
-                .frame(width: 34)
+
+                // Vertical trunk
+                Rectangle()
+                    .fill(Color.gray.opacity(0.4))
+                    .frame(width: 2)
+                    .padding(.vertical, 20)
+
+                // Short stub into parent
+                Rectangle()
+                    .fill(Color.gray.opacity(0.4))
+                    .frame(width: 20, height: 2)
             }
 
-            // The Card itself
             DeviceCardView(device: device)
         }
     }
 }
 
-/// A custom shape that draws the connection lines with proper thickness
-struct TreeLine: View {
+struct ConnectorLine: View {
     let isBottlenecked: Bool
     let speed: Double?
-    
+
     var body: some View {
         Rectangle()
-            .fill(isBottlenecked ? Color.red : Color.gray.opacity(0.6))
+            .fill(isBottlenecked ? Color.red : Color.gray.opacity(0.4))
             .frame(height: thickness)
     }
-    
+
     private var thickness: CGFloat {
         let s = speed ?? 480.0
-        if s <= 12.0 { return 1.5 }
-        if s <= 480.0 { return 3.0 }
-        if s <= 5000.0 { return 5.0 }
-        if s <= 10000.0 { return 7.0 }
-        return 10.0
+        if s <= 12.0 { return 1.0 }
+        if s <= 480.0 { return 2.0 }
+        if s <= 5000.0 { return 4.0 }
+        if s <= 10000.0 { return 6.0 }
+        return 8.0
     }
 }
 
@@ -187,64 +175,52 @@ struct DeviceCardView: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            // Icon Square
             ZStack {
                 RoundedRectangle(cornerRadius: 8)
-                    .fill(LinearGradient(colors: [Color.blue, Color.blue.opacity(0.8)], startPoint: .top, endPoint: .bottom))
-                    .frame(width: 48, height: 48)
-
+                    .fill(Color.blue)
+                    .frame(width: 44, height: 44)
                 Image(systemName: iconFor(device))
-                    .font(.system(size: 22, weight: .semibold))
+                    .font(.system(size: 20))
                     .foregroundColor(.white)
             }
-            .padding(12)
+            .padding(10)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(device.name)
-                    .font(.system(size: 14, weight: .bold))
-                    .lineLimit(1)
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundColor(.primary)
                 if let mfr = device.manufacturer {
                     Text(mfr)
                         .font(.system(size: 11))
                         .foregroundColor(.secondary)
-                        .lineLimit(1)
                 }
             }
-            .padding(.trailing, 10)
+            Spacer(minLength: 20)
 
-            Spacer(minLength: 10)
-
-            // Negotiated Speed
             if let speed = device.negotiatedSpeedMbps {
                 Text("\(Int(speed))")
-                    .font(.system(size: 11, weight: .bold, design: .monospaced))
-                    .foregroundColor(device.isBottlenecked ? .red : .primary.opacity(0.6))
-                    .padding(.trailing, 15)
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundColor(device.isBottlenecked ? .red : .secondary)
+                    .padding(.trailing, 10)
             }
         }
-        .frame(width: 280, height: 72)
-        .background(
-            RoundedRectangle(cornerRadius: 14)
-                .fill(Color(NSColor.controlBackgroundColor))
-                .shadow(color: Color.black.opacity(0.2), radius: 8, x: 0, y: 4)
-        )
+        .frame(width: 260, height: 64)
+        .background(RoundedRectangle(cornerRadius: 12).fill(Color(NSColor.controlBackgroundColor)))
         .overlay(
-            RoundedRectangle(cornerRadius: 14)
-                .stroke(device.isBottlenecked ? Color.red.opacity(0.9) : Color.white.opacity(0.1), lineWidth: device.isBottlenecked ? 2.5 : 1)
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(device.isBottlenecked ? Color.red : Color.gray.opacity(0.2), lineWidth: device.isBottlenecked ? 2 : 1)
         )
+        .shadow(color: .black.opacity(0.1), radius: 4, y: 2)
     }
 
     private func iconFor(_ device: USBDevice) -> String {
         let name = device.name.lowercased()
         if name.contains("hub") { return "cable.connector" }
         if name.contains("ssd") || name.contains("drive") { return "externaldrive.fill" }
-        if name.contains("keyboard") || name.contains("dk5qs") { return "keyboard.fill" }
-        if name.contains("mouse") || name.contains("trackpad") || name.contains("receiver") { return "mouse.fill" }
+        if name.contains("keyboard") { return "keyboard.fill" }
+        if name.contains("mouse") || name.contains("trackpad") { return "mouse.fill" }
         if name.contains("display") { return "desktopcomputer" }
-        if name.contains("headset") || name.contains("audio") { return "headphones" }
-        if name.contains("lan") || name.contains("ethernet") { return "network" }
-        if name.contains("camera") || name.contains("brio") { return "camera.fill" }
-        if name.contains("mic") || name.contains("yeti") { return "mic.fill" }
+        if name.contains("camera") { return "camera.fill" }
         return "usb.fill"
     }
 }
@@ -252,48 +228,49 @@ struct DeviceCardView: View {
 struct HostMacBookNode: View {
     var body: some View {
         ZStack {
-            // Main Chassis (Space Gray)
+            // Laptop Base
             RoundedRectangle(cornerRadius: 20)
-                .fill(LinearGradient(colors: [Color(white: 0.3), Color(white: 0.2)], startPoint: .top, endPoint: .bottom))
-                .frame(width: 320, height: 220)
-                .overlay(RoundedRectangle(cornerRadius: 20).stroke(Color.white.opacity(0.15), lineWidth: 1.5))
-                .shadow(color: .black.opacity(0.4), radius: 20, x: 0, y: 10)
+                .fill(LinearGradient(colors: [Color(white: 0.25), Color(white: 0.15)], startPoint: .top, endPoint: .bottom))
+                .frame(width: 340, height: 240)
+                .overlay(RoundedRectangle(cornerRadius: 20).stroke(Color.white.opacity(0.1), lineWidth: 1))
+                .shadow(color: .black.opacity(0.5), radius: 20, y: 10)
 
-            // The Screen Area (Active/Lit)
-            RoundedRectangle(cornerRadius: 10)
-                .fill(LinearGradient(colors: [Color(white: 0.1), Color(white: 0.05)], startPoint: .top, endPoint: .bottom))
-                .frame(width: 280, height: 120)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 10)
-                        .stroke(LinearGradient(colors: [.blue.opacity(0.3), .clear], startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 1)
-                )
+            // Screen
+            RoundedRectangle(cornerRadius: 12)
+                .fill(Color.black)
+                .frame(width: 300, height: 140)
                 .offset(y: -35)
-            
-            // Content on the screen (Desktop feel)
-            Circle()
-                .fill(Color.blue.opacity(0.2))
-                .blur(radius: 20)
-                .frame(width: 100, height: 100)
-                .offset(x: 60, y: -40)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12)
+                        .stroke(Color.white.opacity(0.1), lineWidth: 1)
+                        .offset(y: -35)
+                )
 
-            // Keyboard area
+            // Screen Content (Mock Desktop)
+            RoundedRectangle(cornerRadius: 8)
+                .fill(LinearGradient(colors: [Color.blue.opacity(0.3), Color.purple.opacity(0.2)], startPoint: .topLeading, endPoint: .bottomTrailing))
+                .frame(width: 280, height: 120)
+                .offset(y: -35)
+                .blur(radius: 5)
+
+            // Keyboard
             RoundedRectangle(cornerRadius: 6)
-                .fill(Color.black.opacity(0.4))
-                .frame(width: 240, height: 40)
-                .offset(y: 55)
+                .fill(Color.black.opacity(0.5))
+                .frame(width: 260, height: 50)
+                .offset(y: 65)
 
             // Trackpad
             RoundedRectangle(cornerRadius: 4)
                 .fill(Color.white.opacity(0.05))
-                .frame(width: 80, height: 30)
-                .offset(y: 90)
+                .frame(width: 100, height: 40)
+                .offset(y: 95)
 
-            // Ports (Visible on the side)
-            VStack(spacing: 24) {
-                Capsule().fill(Color.black).frame(width: 5, height: 18)
-                Capsule().fill(Color.black).frame(width: 5, height: 18)
+            // Connection Ports
+            VStack(spacing: 30) {
+                RoundedRectangle(cornerRadius: 2).fill(Color.black).frame(width: 4, height: 16)
+                RoundedRectangle(cornerRadius: 2).fill(Color.black).frame(width: 4, height: 16)
             }
-            .offset(x: -158, y: -30)
+            .offset(x: -170, y: -20)
         }
     }
 }
@@ -313,24 +290,16 @@ struct LegendBox: View {
             }
         }
         .padding(16)
-        .background(
-            RoundedRectangle(cornerRadius: 12)
-                .fill(Color(NSColor.windowBackgroundColor).opacity(0.95))
-                .shadow(color: Color.black.opacity(0.2), radius: 10)
-        )
+        .background(RoundedRectangle(cornerRadius: 12).fill(.ultraThinMaterial))
+        .shadow(color: .black.opacity(0.2), radius: 10)
     }
 }
 
 struct LegendRow: View {
-    let speed: String
-    let label: String
-    let weight: CGFloat
-
+    let speed: String; let label: String; let weight: CGFloat
     var body: some View {
         HStack {
-            Capsule()
-                .fill(Color.gray.opacity(0.6))
-                .frame(width: 40, height: weight)
+            Capsule().fill(Color.gray.opacity(0.6)).frame(width: 40, height: weight)
             Text(speed).font(.system(size: 10, design: .monospaced))
             Spacer()
             Text(label).font(.caption2).foregroundColor(.secondary)
