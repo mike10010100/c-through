@@ -56,16 +56,10 @@ struct ContentView: View {
             Color(NSColor.windowBackgroundColor).ignoresSafeArea()
 
             // Native macOS Zoomable/Pannable ScrollView
-            ZoomableScrollView {
+            NSZoomableScrollView {
+                // Wrap everything in a container that allows overlay resolving
                 ZStack {
-                    // 1. Connection Lines (In the Background)
-                    GeometryReader { proxy in
-                        Color.clear.overlayPreferenceValue(DeviceAnchorKey.self) { anchors in
-                            ConnectionLinesView(anchors: anchors, devices: viewModel.devices, proxy: proxy)
-                        }
-                    }
-
-                    // 2. Nodes (In the Foreground)
+                    // 1. Nodes (Foreground) - defines the anchors
                     HStack(alignment: .center, spacing: 180) {
                         VStack(alignment: .trailing, spacing: 60) {
                             if viewModel.devices.isEmpty {
@@ -82,20 +76,26 @@ struct ContentView: View {
                                 [DeviceAnchorData(id: "HOST", leadingAnchor: $0, trailingAnchor: nil)]
                             }
                     }
-                    .padding(400) // Large canvas for panning
+                    .padding(400)
+                }
+                .overlayPreferenceValue(DeviceAnchorKey.self) { anchors in
+                    // 2. Connection Lines (In the Background relative to overlay block)
+                    GeometryReader { proxy in
+                        ConnectionLinesView(anchors: anchors, devices: viewModel.devices, proxy: proxy)
+                            .zIndex(-1) // Push lines behind nodes
+                    }
                 }
             }
 
-            // Overlays
+            // Overlays (Legend and Controls)
             VStack {
                 Spacer()
-                HStack {
+                HStack(alignment: .bottom) {
                     LegendBox().padding(40)
                     Spacer()
                 }
             }
 
-            // Top Bar Overlay
             VStack {
                 HStack {
                     Spacer()
@@ -116,7 +116,7 @@ struct ContentView: View {
 
 // MARK: - Native Zoomable ScrollView
 
-struct ZoomableScrollView<Content: View>: NSViewRepresentable {
+struct NSZoomableScrollView<Content: View>: NSViewRepresentable {
     @ViewBuilder let content: Content
 
     func makeNSView(context _: Context) -> NSScrollView {
@@ -127,10 +127,18 @@ struct ZoomableScrollView<Content: View>: NSViewRepresentable {
         scrollView.magnification = 1.0
         scrollView.maxMagnification = 5.0
         scrollView.minMagnification = 0.1
+        scrollView.drawsBackground = false
 
         let hostingView = NSHostingView(rootView: content)
         hostingView.translatesAutoresizingMaskIntoConstraints = false
         scrollView.documentView = hostingView
+
+        // Ensure hosting view fills the scroll view context
+        hostingView.topAnchor.constraint(equalTo: scrollView.contentView.topAnchor).isActive = true
+        hostingView.leadingAnchor.constraint(equalTo: scrollView.contentView.leadingAnchor).isActive = true
+        // Allow the document view to grow
+        hostingView.widthAnchor.constraint(greaterThanOrEqualToConstant: 2000).isActive = true
+        hostingView.heightAnchor.constraint(greaterThanOrEqualToConstant: 2000).isActive = true
 
         return scrollView
     }
@@ -170,7 +178,6 @@ struct ConnectionLinesView: View {
                 var path = Path()
                 path.move(to: p1)
 
-                // Horizontal offset for the curve
                 let distance = p2.x - p1.x
                 let control1 = CGPoint(x: p1.x + distance * 0.4, y: p1.y)
                 let control2 = CGPoint(x: p1.x + distance * 0.6, y: p2.y)
@@ -181,7 +188,6 @@ struct ConnectionLinesView: View {
 
                 context.stroke(path, with: .color(color), lineWidth: thickness)
 
-                // Recurse
                 drawLines(for: device.children, to: device.id, in: &context)
             }
         }
@@ -270,33 +276,36 @@ struct DeviceCardView: View {
 struct HostMacBookNode: View {
     var body: some View {
         ZStack {
-            // Unified Chassis
+            // Main Chassis
             RoundedRectangle(cornerRadius: 24)
                 .fill(LinearGradient(colors: [Color(white: 0.35), Color(white: 0.25)], startPoint: .top, endPoint: .bottom))
                 .frame(width: 360, height: 260)
                 .overlay(RoundedRectangle(cornerRadius: 24).stroke(Color.white.opacity(0.15), lineWidth: 1.5))
-                .shadow(color: .black.opacity(0.4), radius: 30, y: 15)
+                .shadow(color: .black.opacity(0.4), radius: 20, y: 10)
 
-            // Screen
-            RoundedRectangle(cornerRadius: 12)
-                .fill(Color.black)
-                .frame(width: 320, height: 150)
-                .offset(y: -30)
-                .overlay(
-                    Circle().fill(Color.blue.opacity(0.1)).blur(radius: 30).frame(width: 150).offset(y: -30)
-                )
+            // Screen & Chassis unified
+            ZStack {
+                // Black Screen Area
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(Color.black)
+                    .frame(width: 320, height: 150)
+                    .overlay(
+                        Circle().fill(Color.blue.opacity(0.1)).blur(radius: 30).frame(width: 150)
+                    )
 
-            // Keyboard area
-            RoundedRectangle(cornerRadius: 6)
-                .fill(Color.black.opacity(0.4))
-                .frame(width: 280, height: 50)
-                .offset(y: 75)
+                // Keyboard area
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(Color.black.opacity(0.4))
+                    .frame(width: 280, height: 50)
+                    .offset(y: 105)
 
-            // Trackpad
-            RoundedRectangle(cornerRadius: 4)
-                .fill(Color.white.opacity(0.03))
-                .frame(width: 110, height: 40)
-                .offset(y: 105)
+                // Trackpad
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(Color.white.opacity(0.03))
+                    .frame(width: 110, height: 40)
+                    .offset(y: 135)
+            }
+            .offset(y: -30)
 
             // Ports
             VStack(spacing: 30) {
