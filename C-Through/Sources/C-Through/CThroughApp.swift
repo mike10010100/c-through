@@ -1,6 +1,22 @@
 import CThroughEngine
 import SwiftUI
 
+// MARK: - Preferences for Line Routing
+
+struct DeviceAnchorData: Equatable {
+    let id: String
+    let center: Anchor<CGPoint>
+}
+
+struct DeviceAnchorKey: PreferenceKey {
+    static var defaultValue: [DeviceAnchorData] = []
+    static func reduce(value: inout [DeviceAnchorData], nextValue: () -> [DeviceAnchorData]) {
+        value.append(contentsOf: nextValue())
+    }
+}
+
+// MARK: - App Entry
+
 @main
 struct CThroughApp: App {
     @StateObject private var viewModel = DeviceViewModel(explorer: USBExplorer())
@@ -8,10 +24,16 @@ struct CThroughApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView(viewModel: viewModel)
-                .frame(minWidth: 1100, minHeight: 800)
+                .frame(minWidth: 1200, minHeight: 900)
                 .background(Color(NSColor.windowBackgroundColor))
         }
         .windowStyle(.hiddenTitleBar)
+        .commands {
+            CommandGroup(replacing: .newItem) {
+                Button("Refresh") { viewModel.refresh() }
+                    .keyboardShortcut("r", modifiers: .command)
+            }
+        }
     }
 }
 
@@ -29,6 +51,8 @@ class DeviceViewModel: ObservableObject {
     }
 }
 
+// MARK: - Main View
+
 struct ContentView: View {
     @ObservedObject var viewModel: DeviceViewModel
     @State private var zoomScale: CGFloat = 1.0
@@ -37,16 +61,25 @@ struct ContentView: View {
 
     var body: some View {
         ZStack {
-            // Main Canvas Area
+            // Main Drawing Area
             GeometryReader { _ in
                 ZStack {
                     Color(NSColor.windowBackgroundColor).ignoresSafeArea()
 
-                    // The Diagram Content
-                    Group {
-                        HStack(alignment: .center, spacing: 100) {
+                    // The Entire Diagram
+                    ZStack {
+                        // 1. Connection Lines (Bottom Layer)
+                        GeometryReader { proxy in
+                            ZStack {
+                                // Draw lines using anchors
+                                ConnectionLayer(devices: viewModel.devices, proxy: proxy)
+                            }
+                        }
+
+                        // 2. Nodes Layer
+                        HStack(alignment: .center, spacing: 120) {
                             // Tree of Devices
-                            VStack(alignment: .trailing, spacing: 50) {
+                            VStack(alignment: .trailing, spacing: 60) {
                                 if viewModel.devices.isEmpty {
                                     Text("No USB devices found.").foregroundColor(.secondary)
                                 } else {
@@ -56,8 +89,11 @@ struct ContentView: View {
                                 }
                             }
 
-                            // The Host
+                            // The Host MacBook
                             HostMacBookNode()
+                                .anchorPreference(key: DeviceAnchorKey.self, value: .center) {
+                                    [DeviceAnchorData(id: "HOST", center: $0)]
+                                }
                         }
                     }
                     .scaleEffect(zoomScale)
@@ -65,7 +101,6 @@ struct ContentView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .contentShape(Rectangle())
-                // Panning Gesture
                 .gesture(
                     DragGesture()
                         .onChanged { value in
@@ -74,143 +109,159 @@ struct ContentView: View {
                                 height: lastOffset.height + value.translation.height
                             )
                         }
-                        .onEnded { _ in
-                            lastOffset = offset
-                        }
+                        .onEnded { _ in lastOffset = offset }
                 )
-                // Zoom Gesture
                 .gesture(
                     MagnificationGesture()
-                        .onChanged { value in
-                            zoomScale = value.magnitude
-                        }
+                        .onChanged { value in zoomScale = value.magnitude }
                 )
             }
 
-            // Legend Overlay (Bottom Left)
+            // UI Overlays
             VStack {
                 Spacer()
-                HStack {
-                    LegendBox()
-                        .padding(30)
+                HStack(alignment: .bottom) {
+                    LegendBox().padding(40)
                     Spacer()
+                    // Zoom readout
+                    Text("\(Int(zoomScale * 100))%")
+                        .font(.system(size: 12, weight: .bold, design: .monospaced))
+                        .padding(8)
+                        .background(Capsule().fill(.ultraThinMaterial))
+                        .padding(40)
                 }
-            }
-
-            // Floating Refresh Button
-            VStack {
-                HStack {
-                    Spacer()
-                    Button(action: viewModel.refresh) {
-                        Image(systemName: "arrow.clockwise")
-                            .font(.system(size: 14, weight: .bold))
-                            .padding(10)
-                            .background(Circle().fill(.ultraThinMaterial))
-                    }
-                    .buttonStyle(.plain)
-                    .padding(30)
-                }
-                Spacer()
             }
         }
     }
 }
 
-struct DeviceTreeBranch: View {
+// MARK: - Line Routing
+
+struct ConnectionLayer: View {
+    let devices: [USBDevice]
+    let proxy: GeometryProxy
+
+    var body: some View {
+        ZStack {
+            // Lines to Host
+            ForEach(devices) { device in
+                LineConnector(from: device.id, to: "HOST", speed: device.negotiatedSpeedMbps, isBottlenecked: device.isBottlenecked)
+
+                // Recursive lines for children
+                DeviceChildLines(device: device)
+            }
+        }
+        .overlayPreferenceValue(DeviceAnchorKey.self) { _ in
+            // This is handled inside LineConnector via the same preference value
+            Color.clear
+        }
+    }
+}
+
+struct DeviceChildLines: View {
     let device: USBDevice
-
     var body: some View {
-        HStack(alignment: .center, spacing: 0) {
-            // Children to the left
-            if !device.children.isEmpty {
-                VStack(alignment: .trailing, spacing: 20) {
-                    ForEach(device.children) { child in
-                        HStack(spacing: 0) {
-                            DeviceTreeBranch(device: child)
-                            ConnectorLine(isBottlenecked: child.isBottlenecked, speed: child.negotiatedSpeedMbps)
-                                .frame(width: 40)
-                        }
-                    }
-                }
-
-                // Vertical trunk
-                Rectangle()
-                    .fill(Color.gray.opacity(0.4))
-                    .frame(width: 2)
-                    .padding(.vertical, 20)
-
-                // Short stub into parent
-                Rectangle()
-                    .fill(Color.gray.opacity(0.4))
-                    .frame(width: 20, height: 2)
+        ZStack {
+            ForEach(device.children) { child in
+                LineConnector(from: child.id, to: device.id, speed: child.negotiatedSpeedMbps, isBottlenecked: child.isBottlenecked)
+                DeviceChildLines(device: child)
             }
-
-            DeviceCardView(device: device)
         }
     }
 }
 
-struct ConnectorLine: View {
-    let isBottlenecked: Bool
+struct LineConnector: View {
+    let from: String
+    let to: String
     let speed: Double?
+    let isBottlenecked: Bool
 
     var body: some View {
-        Rectangle()
-            .fill(isBottlenecked ? Color.red : Color.gray.opacity(0.4))
-            .frame(height: thickness)
+        GeometryReader { proxy in
+            Color.clear.overlayPreferenceValue(DeviceAnchorKey.self) { anchors in
+                if let fromAnchor = anchors.first(where: { $0.id == from }),
+                   let toAnchor = anchors.first(where: { $0.id == to }) {
+                    let p1 = proxy[fromAnchor.center]
+                    let p2 = proxy[toAnchor.center]
+
+                    Path { path in
+                        path.move(to: p1)
+                        // Smooth cubic bezier for organic "cable" look
+                        let control1 = CGPoint(x: p1.x + (p2.x - p1.x) / 2, y: p1.y)
+                        let control2 = CGPoint(x: p1.x + (p2.x - p1.x) / 2, y: p2.y)
+                        path.addCurve(to: p2, control1: control1, control2: control2)
+                    }
+                    .stroke(
+                        isBottlenecked ? Color.red : Color.gray.opacity(0.5),
+                        lineWidth: thickness
+                    )
+                }
+            }
+        }
     }
 
     private var thickness: CGFloat {
         let s = speed ?? 480.0
-        if s <= 12.0 { return 1.0 }
-        if s <= 480.0 { return 2.0 }
-        if s <= 5000.0 { return 4.0 }
-        if s <= 10000.0 { return 6.0 }
-        return 8.0
+        if s <= 12.0 { return 1.5 }
+        if s <= 480.0 { return 3.0 }
+        if s <= 5000.0 { return 5.0 }
+        if s <= 10000.0 { return 7.0 }
+        return 10.0
+    }
+}
+
+// MARK: - Nodes
+
+struct DeviceTreeBranch: View {
+    let device: USBDevice
+    var body: some View {
+        HStack(alignment: .center, spacing: 80) {
+            if !device.children.isEmpty {
+                VStack(alignment: .trailing, spacing: 30) {
+                    ForEach(device.children) { child in
+                        DeviceTreeBranch(device: child)
+                    }
+                }
+            }
+            DeviceCardView(device: device)
+                .anchorPreference(key: DeviceAnchorKey.self, value: .center) {
+                    [DeviceAnchorData(id: device.id, center: $0)]
+                }
+        }
     }
 }
 
 struct DeviceCardView: View {
     let device: USBDevice
-
     var body: some View {
         HStack(spacing: 0) {
             ZStack {
-                RoundedRectangle(cornerRadius: 8)
+                RoundedRectangle(cornerRadius: 10)
                     .fill(Color.blue)
-                    .frame(width: 44, height: 44)
+                    .frame(width: 50, height: 50)
                 Image(systemName: iconFor(device))
-                    .font(.system(size: 20))
+                    .font(.system(size: 24))
                     .foregroundColor(.white)
             }
-            .padding(10)
+            .padding(12)
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(device.name)
-                    .font(.system(size: 13, weight: .bold))
-                    .foregroundColor(.primary)
+                Text(device.name).font(.system(size: 15, weight: .bold))
                 if let mfr = device.manufacturer {
-                    Text(mfr)
-                        .font(.system(size: 11))
-                        .foregroundColor(.secondary)
+                    Text(mfr).font(.system(size: 12)).foregroundColor(.secondary)
                 }
             }
-            Spacer(minLength: 20)
-
+            Spacer(minLength: 30)
             if let speed = device.negotiatedSpeedMbps {
-                Text("\(Int(speed))")
-                    .font(.system(size: 10, design: .monospaced))
+                Text("\(Int(speed))").font(.system(size: 11, design: .monospaced))
                     .foregroundColor(device.isBottlenecked ? .red : .secondary)
-                    .padding(.trailing, 10)
+                    .padding(.trailing, 15)
             }
         }
-        .frame(width: 260, height: 64)
-        .background(RoundedRectangle(cornerRadius: 12).fill(Color(NSColor.controlBackgroundColor)))
-        .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(device.isBottlenecked ? Color.red : Color.gray.opacity(0.2), lineWidth: device.isBottlenecked ? 2 : 1)
-        )
-        .shadow(color: .black.opacity(0.1), radius: 4, y: 2)
+        .frame(width: 300, height: 74)
+        .background(RoundedRectangle(cornerRadius: 16).fill(Color(NSColor.controlBackgroundColor)))
+        .overlay(RoundedRectangle(cornerRadius: 16).stroke(device.isBottlenecked ? Color.red : Color.gray.opacity(0.2), lineWidth: 1.5))
+        .shadow(color: .black.opacity(0.15), radius: 10, y: 5)
     }
 
     private func iconFor(_ device: USBDevice) -> String {
@@ -220,78 +271,81 @@ struct DeviceCardView: View {
         if name.contains("keyboard") { return "keyboard.fill" }
         if name.contains("mouse") || name.contains("trackpad") { return "mouse.fill" }
         if name.contains("display") { return "desktopcomputer" }
-        if name.contains("camera") { return "camera.fill" }
         return "usb.fill"
     }
 }
 
+// MARK: - Host MacBook Node
+
 struct HostMacBookNode: View {
     var body: some View {
         ZStack {
-            // Laptop Base
-            RoundedRectangle(cornerRadius: 20)
-                .fill(LinearGradient(colors: [Color(white: 0.25), Color(white: 0.15)], startPoint: .top, endPoint: .bottom))
-                .frame(width: 340, height: 240)
-                .overlay(RoundedRectangle(cornerRadius: 20).stroke(Color.white.opacity(0.1), lineWidth: 1))
-                .shadow(color: .black.opacity(0.5), radius: 20, y: 10)
+            // Main Chassis (Space Gray Aluminum)
+            RoundedRectangle(cornerRadius: 24)
+                .fill(LinearGradient(colors: [Color(white: 0.4), Color(white: 0.2)], startPoint: .top, endPoint: .bottom))
+                .frame(width: 400, height: 280)
+                .overlay(RoundedRectangle(cornerRadius: 24).stroke(Color.white.opacity(0.15), lineWidth: 1))
+                .shadow(color: .black.opacity(0.5), radius: 30, y: 15)
 
-            // Screen
-            RoundedRectangle(cornerRadius: 12)
-                .fill(Color.black)
-                .frame(width: 300, height: 140)
-                .offset(y: -35)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 12)
-                        .stroke(Color.white.opacity(0.1), lineWidth: 1)
-                        .offset(y: -35)
-                )
+            // The Screen (Black Mirror)
+            VStack(spacing: 0) {
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(Color.black)
+                    .frame(width: 360, height: 160)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12)
+                            .stroke(Color.white.opacity(0.05), lineWidth: 1)
+                    )
+                    .overlay(
+                        Circle().fill(Color.blue.opacity(0.15)).blur(radius: 40).frame(width: 150)
+                    )
 
-            // Screen Content (Mock Desktop)
+                Spacer()
+            }
+            .padding(.top, 20)
+
+            // Keyboard Area
             RoundedRectangle(cornerRadius: 8)
-                .fill(LinearGradient(colors: [Color.blue.opacity(0.3), Color.purple.opacity(0.2)], startPoint: .topLeading, endPoint: .bottomTrailing))
-                .frame(width: 280, height: 120)
-                .offset(y: -35)
-                .blur(radius: 5)
-
-            // Keyboard
-            RoundedRectangle(cornerRadius: 6)
-                .fill(Color.black.opacity(0.5))
-                .frame(width: 260, height: 50)
-                .offset(y: 65)
+                .fill(Color.black.opacity(0.4))
+                .frame(width: 320, height: 60)
+                .offset(y: 75)
 
             // Trackpad
-            RoundedRectangle(cornerRadius: 4)
-                .fill(Color.white.opacity(0.05))
-                .frame(width: 100, height: 40)
-                .offset(y: 95)
+            RoundedRectangle(cornerRadius: 6)
+                .fill(Color.white.opacity(0.03))
+                .frame(width: 140, height: 45)
+                .offset(y: 110)
+                .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.white.opacity(0.05), lineWidth: 1).offset(y: 110))
 
-            // Connection Ports
-            VStack(spacing: 30) {
-                RoundedRectangle(cornerRadius: 2).fill(Color.black).frame(width: 4, height: 16)
-                RoundedRectangle(cornerRadius: 2).fill(Color.black).frame(width: 4, height: 16)
+            // Thunderbolt Ports (Left side)
+            VStack(spacing: 35) {
+                Capsule().fill(Color.black).frame(width: 6, height: 20)
+                Capsule().fill(Color.black).frame(width: 6, height: 20)
             }
-            .offset(x: -170, y: -20)
+            .offset(x: -198, y: -20)
         }
     }
 }
 
+// MARK: - Legend
+
 struct LegendBox: View {
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            LegendRow(speed: "1.5 Mbps", label: "USB 1.0", weight: 1.0)
-            LegendRow(speed: "480 Mbps", label: "USB 2.0", weight: 2.0)
-            LegendRow(speed: "5,000 Mbps", label: "USB 3.0", weight: 4.0)
-            LegendRow(speed: "10,000 Mbps", label: "USB 3.1", weight: 6.0)
-            LegendRow(speed: "40,000 Mbps", label: "Thunderbolt 3", weight: 8.0)
-            Divider().padding(.vertical, 4)
+        VStack(alignment: .leading, spacing: 10) {
+            LegendRow(speed: "1.5 Mbps", label: "USB 1.0", weight: 1.5)
+            LegendRow(speed: "480 Mbps", label: "USB 2.0", weight: 3.0)
+            LegendRow(speed: "5,000 Mbps", label: "USB 3.0", weight: 5.0)
+            LegendRow(speed: "10,000 Mbps", label: "USB 3.1", weight: 7.0)
+            LegendRow(speed: "40,000 Mbps", label: "Thunderbolt 3", weight: 10.0)
+            Divider().padding(.vertical, 5)
             HStack {
-                Capsule().fill(Color.red).frame(width: 40, height: 4)
-                Text("Limited by cable throughput").font(.caption2).foregroundColor(.red)
+                Capsule().fill(Color.red).frame(width: 45, height: 5)
+                Text("Limited by cable throughput").font(.caption).foregroundColor(.red)
             }
         }
-        .padding(16)
-        .background(RoundedRectangle(cornerRadius: 12).fill(.ultraThinMaterial))
-        .shadow(color: .black.opacity(0.2), radius: 10)
+        .padding(20)
+        .background(RoundedRectangle(cornerRadius: 18).fill(.ultraThinMaterial))
+        .shadow(color: .black.opacity(0.2), radius: 15)
     }
 }
 
@@ -299,11 +353,11 @@ struct LegendRow: View {
     let speed: String; let label: String; let weight: CGFloat
     var body: some View {
         HStack {
-            Capsule().fill(Color.gray.opacity(0.6)).frame(width: 40, height: weight)
-            Text(speed).font(.system(size: 10, design: .monospaced))
+            Capsule().fill(Color.gray.opacity(0.5)).frame(width: 45, height: weight)
+            Text(speed).font(.system(size: 11, design: .monospaced))
             Spacer()
-            Text(label).font(.caption2).foregroundColor(.secondary)
+            Text(label).font(.caption).foregroundColor(.secondary)
         }
-        .frame(width: 180)
+        .frame(width: 200)
     }
 }
