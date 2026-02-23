@@ -6,7 +6,12 @@ import SwiftUI
 
 public struct DeviceAnchorData: Equatable {
     public let id: String
-    public let bounds: Anchor<CGRect>
+    public var bounds: Anchor<CGRect>
+    
+    public init(id: String, bounds: Anchor<CGRect>) {
+        self.id = id
+        self.bounds = bounds
+    }
 }
 
 public struct DeviceAnchorKey: PreferenceKey {
@@ -34,7 +39,6 @@ public class DeviceViewModel: ObservableObject {
 
 public struct ContentView: View {
     @ObservedObject var viewModel: DeviceViewModel
-    @State private var zoomScale: CGFloat = 1.0
 
     public init(viewModel: DeviceViewModel) {
         self.viewModel = viewModel
@@ -44,12 +48,16 @@ public struct ContentView: View {
         ZStack {
             Color(NSColor.windowBackgroundColor).ignoresSafeArea()
 
-            // Pure SwiftUI panning and zooming
-            ScrollView([.horizontal, .vertical], showsIndicators: true) {
+            // THE BULLETPROOF NATIVE ZOOM: NSScrollView wrapper
+            // This is the ONLY way to get native macOS pinch-to-zoom and scroll-zoom.
+            NativeZoomableCanvas {
                 ZStack {
-                    // Content Layer
-                    HStack(alignment: .center, spacing: 100) {
-                        VStack(alignment: .trailing, spacing: 40) {
+                    // Huge clear background to define coordinate space
+                    Color.clear.frame(width: 4000, height: 3000)
+                    
+                    // THE CONTENT
+                    HStack(alignment: .center, spacing: 200) {
+                        VStack(alignment: .trailing, spacing: 80) {
                             if viewModel.devices.isEmpty {
                                 Text("No USB devices found.").foregroundColor(.secondary)
                             } else {
@@ -64,31 +72,21 @@ public struct ContentView: View {
                                 [DeviceAnchorData(id: "HOST", bounds: $0)]
                             }
                     }
-                    .padding(300) // Padding so it's pannable
                 }
+                // IMPORTANT: Connection lines must be drawn INSIDE the hosting view 
+                // so they share the same anchor resolution coordinate space.
                 .backgroundPreferenceValue(DeviceAnchorKey.self) { anchors in
-                    // Connection Lines (Drawn strictly behind nodes)
                     GeometryReader { proxy in
                         ConnectionLinesView(anchors: anchors, devices: viewModel.devices, proxy: proxy)
                     }
                 }
-                .scaleEffect(zoomScale)
-                // Frame ensures the scrollview content size accommodates the scaled view
-                .frame(minWidth: 1500, minHeight: 1200)
             }
-            .gesture(
-                MagnificationGesture()
-                    .onChanged { value in
-                        let newScale = value.magnitude
-                        zoomScale = max(0.2, min(newScale, 3.0))
-                    }
-            )
 
-            // Overlays
+            // Overlays (floating UI)
             VStack {
                 Spacer()
-                HStack(alignment: .bottom) {
-                    LegendBox().padding(30)
+                HStack {
+                    LegendBox().padding(40)
                     Spacer()
                 }
             }
@@ -107,6 +105,50 @@ public struct ContentView: View {
                 }
                 Spacer()
             }
+        }
+    }
+}
+
+// MARK: - Native Zoomable Canvas (The Core fix)
+
+struct NativeZoomableCanvas<Content: View>: NSViewRepresentable {
+    let content: Content
+
+    init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
+
+    func makeNSView(context _: Context) -> NSScrollView {
+        let scrollView = NSScrollView()
+        scrollView.hasVerticalScroller = true
+        scrollView.hasHorizontalScroller = true
+        scrollView.allowsMagnification = true // THIS enables pinch-to-zoom
+        scrollView.magnification = 1.0
+        scrollView.maxMagnification = 10.0
+        scrollView.minMagnification = 0.1
+        scrollView.drawsBackground = false
+        
+        let hostingView = NSHostingView(rootView: content)
+        hostingView.translatesAutoresizingMaskIntoConstraints = false
+        // Fixed massive frame for the internal content
+        hostingView.frame = NSRect(x: 0, y: 0, width: 4000, height: 3000)
+        scrollView.documentView = hostingView
+        
+        // Scroll to center initially so the user starts at the MacBook
+        DispatchQueue.main.async {
+            let contentSize = hostingView.frame.size
+            let visibleSize = scrollView.contentView.bounds.size
+            let scrollPoint = NSPoint(x: (contentSize.width - visibleSize.width) / 2 + 500,
+                                     y: (contentSize.height - visibleSize.height) / 2)
+            scrollView.contentView.scroll(to: scrollPoint)
+        }
+
+        return scrollView
+    }
+
+    func updateNSView(_ nsView: NSScrollView, context _: Context) {
+        if let hostingView = nsView.documentView as? NSHostingView<Content> {
+            hostingView.rootView = content
         }
     }
 }
@@ -170,9 +212,9 @@ struct ConnectionLinesView: View {
 struct DeviceTreeBranch: View {
     let device: USBDevice
     var body: some View {
-        HStack(alignment: .center, spacing: 100) {
+        HStack(alignment: .center, spacing: 150) {
             if !device.children.isEmpty {
-                VStack(alignment: .trailing, spacing: 20) {
+                VStack(alignment: .trailing, spacing: 40) {
                     ForEach(device.children) { child in
                         DeviceTreeBranch(device: child)
                     }
@@ -193,30 +235,30 @@ struct DeviceCardView: View {
             ZStack {
                 RoundedRectangle(cornerRadius: 10)
                     .fill(Color.blue)
-                    .frame(width: 44, height: 44)
+                    .frame(width: 48, height: 48)
                 Image(systemName: iconFor(device))
-                    .font(.system(size: 20))
+                    .font(.system(size: 22))
                     .foregroundColor(.white)
             }
-            .padding(10)
+            .padding(12)
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(device.name).font(.system(size: 13, weight: .bold)).lineLimit(1)
+                Text(device.name).font(.system(size: 14, weight: .bold)).lineLimit(1)
                 if let mfr = device.manufacturer {
                     Text(mfr).font(.system(size: 11)).foregroundColor(.secondary).lineLimit(1)
                 }
             }
-            Spacer(minLength: 20)
+            Spacer(minLength: 40)
             if let speed = device.negotiatedSpeedMbps {
                 Text("\(Int(speed))").font(.system(size: 10, design: .monospaced))
                     .foregroundColor(device.isBottlenecked ? .red : .secondary)
-                    .padding(.trailing, 12)
+                    .padding(.trailing, 15)
             }
         }
-        .frame(width: 260, height: 64)
-        .background(RoundedRectangle(cornerRadius: 12).fill(Color(NSColor.controlBackgroundColor)))
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke(device.isBottlenecked ? Color.red : Color.gray.opacity(0.15), lineWidth: device.isBottlenecked ? 2 : 1))
-        .shadow(color: .black.opacity(0.15), radius: 6, y: 3)
+        .frame(width: 280, height: 70)
+        .background(RoundedRectangle(cornerRadius: 14).fill(Color(NSColor.controlBackgroundColor)))
+        .overlay(RoundedRectangle(cornerRadius: 14).stroke(device.isBottlenecked ? Color.red : Color.white.opacity(0.1), lineWidth: device.isBottlenecked ? 2 : 1))
+        .shadow(color: .black.opacity(0.2), radius: 8, y: 4)
     }
 
     private func iconFor(_ device: USBDevice) -> String {
@@ -235,31 +277,45 @@ struct DeviceCardView: View {
 struct HostMacBookNode: View {
     var body: some View {
         ZStack {
-            // Main Chassis - clean, non-glowing silver/space gray design
-            RoundedRectangle(cornerRadius: 16)
-                .fill(Color(NSColor.systemGray))
-                .frame(width: 300, height: 210)
-                .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.white.opacity(0.2), lineWidth: 1))
-                .shadow(color: .black.opacity(0.3), radius: 15, y: 8)
+            // Main Chassis (Space Gray Aluminum)
+            RoundedRectangle(cornerRadius: 24)
+                .fill(LinearGradient(colors: [Color(white: 0.45), Color(white: 0.3)], startPoint: .top, endPoint: .bottom))
+                .frame(width: 400, height: 280)
+                .overlay(RoundedRectangle(cornerRadius: 24).stroke(Color.white.opacity(0.2), lineWidth: 1.5))
+                .shadow(color: .black.opacity(0.5), radius: 30, y: 15)
 
-            // Keyboard area well
-            RoundedRectangle(cornerRadius: 8)
-                .fill(Color(NSColor.darkGray))
-                .frame(width: 260, height: 90)
-                .offset(y: -25)
-
-            // Trackpad
-            RoundedRectangle(cornerRadius: 6)
-                .fill(Color(NSColor.darkGray).opacity(0.8))
-                .frame(width: 100, height: 45)
-                .offset(y: 60)
+            VStack(spacing: 20) {
+                // Screen Area (Larger and more distinct)
+                RoundedRectangle(cornerRadius: 14)
+                    .fill(Color.black)
+                    .frame(width: 360, height: 160)
+                    .overlay(
+                        ZStack {
+                            // Desktop Glow
+                            Circle().fill(Color.blue.opacity(0.15)).blur(radius: 40).frame(width: 200)
+                            // Subtle Screen Frame
+                            RoundedRectangle(cornerRadius: 14).stroke(Color.white.opacity(0.1), lineWidth: 1)
+                        }
+                    )
+                
+                // Keyboard area well
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(Color.black.opacity(0.5))
+                    .frame(width: 320, height: 50)
+                
+                // Trackpad
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(Color.white.opacity(0.05))
+                    .frame(width: 140, height: 40)
+            }
+            .offset(y: -10)
             
             // Physical Port Indents on the left
-            VStack(spacing: 20) {
-                Capsule().fill(Color.black.opacity(0.8)).frame(width: 6, height: 16)
-                Capsule().fill(Color.black.opacity(0.8)).frame(width: 6, height: 16)
+            VStack(spacing: 40) {
+                Capsule().fill(Color.black).frame(width: 6, height: 22)
+                Capsule().fill(Color.black).frame(width: 6, height: 22)
             }
-            .offset(x: -150, y: -20)
+            .offset(x: -200, y: -30)
         }
     }
 }

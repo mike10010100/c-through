@@ -1,9 +1,9 @@
-@testable import CThroughEngine
-import SwiftUI
 import XCTest
+import SwiftUI
+@testable import CThroughEngine
 
 final class UISnapshotTests: XCTestCase {
-    func testMainViewSnapshot() {
+    func testMainViewAtDifferentScales() {
         let explorer = MockUSBExplorer()
         explorer.mockDevices = [
             USBDevice(
@@ -30,13 +30,13 @@ final class UISnapshotTests: XCTestCase {
                 maxCapableSpeedMbps: 10000
             )
         ]
-
+        
         let viewModel = DeviceViewModel(explorer: explorer)
-
-        // Use a container that resolves anchors correctly for the snapshot
+        
+        // Test 100% Scale
         let view = ZStack {
             Color.black.ignoresSafeArea()
-
+            
             ZStack {
                 HStack(alignment: .center, spacing: 200) {
                     VStack(alignment: .trailing, spacing: 80) {
@@ -57,12 +57,16 @@ final class UISnapshotTests: XCTestCase {
                 }
             }
         }
-
-        // Headless rendering of anchors often requires multiple passes or a real window.
-        // For the purpose of this prototype, we'll render it at a fixed size.
+        
         if let image = view.snapshot(size: CGSize(width: 1400, height: 1000)) {
-            let path = saveSnapshot(image, name: "final_snapshot.png")
-            print("Snapshot saved to: \(path ?? "unknown")")
+            let path = saveSnapshot(image, name: "final_verification_100.png")
+            print("100% Snapshot saved to: \(path ?? "unknown")")
+        }
+        
+        // Test 50% Scale
+        if let image = view.scaleEffect(0.5).snapshot(size: CGSize(width: 700, height: 500)) {
+            let path = saveSnapshot(image, name: "final_verification_50.png")
+            print("50% Snapshot saved to: \(path ?? "unknown")")
         }
     }
 }
