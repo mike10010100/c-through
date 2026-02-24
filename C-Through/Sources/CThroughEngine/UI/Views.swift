@@ -80,10 +80,15 @@ public struct ContentView: View {
                 GeometryReader { proxy in
                     NativeZoomableCanvas {
                         ZStack {
-                            Color.clear.frame(
-                                minWidth: proxy.size.width,
-                                minHeight: proxy.size.height
-                            )
+                            // Invisible background to catch deselect taps
+                            Color.black.opacity(0.0001)
+                                .frame(
+                                    minWidth: proxy.size.width,
+                                    minHeight: proxy.size.height
+                                )
+                                .onTapGesture {
+                                    withAnimation { viewModel.selectedDevice = nil }
+                                }
 
                             HStack(alignment: .center, spacing: 200) {
                                 VStack(alignment: .trailing, spacing: 80) {
@@ -102,7 +107,6 @@ public struct ContentView: View {
                                     }
                             }
                         }
-                        .contentShape(Rectangle())
                         .padding(1000)
                         .backgroundPreferenceValue(DeviceAnchorKey.self) { anchors in
                             GeometryReader { geo in
@@ -140,8 +144,8 @@ public struct ContentView: View {
                     Spacer()
                 }
             }
-            .onTapGesture {
-                withAnimation { viewModel.selectedDevice = nil }
+            .onAppear {
+                NSApp.activate(ignoringOtherApps: true)
             }
 
             if let selected = viewModel.selectedDevice {
@@ -277,24 +281,14 @@ struct InspectorRow: View {
 
 // MARK: - AppKit Subclasses
 
-/// NSHostingView subclass that avoids swallowing gestures we want to handle ourselves.
-private class CanvasHostingView<Content: View>: NSHostingView<Content> {
-    weak var parentScrollView: CanvasScrollView?
-}
+private class CanvasHostingView<Content: View>: NSHostingView<Content> {}
 
 private class CanvasScrollView: NSScrollView {
-    override func scrollWheel(with event: NSEvent) {
-        if event.modifierFlags.contains(.command) {
-            let delta = event.scrollingDeltaY
-            let factor = delta > 0 ? 1.1 : 0.9
-            let newMag = max(minMagnification, min(maxMagnification, magnification * factor))
-            
-            if let docView = documentView {
-                let pointInDoc = docView.convert(event.locationInWindow, from: nil)
-                setMagnification(newMag, centeredAt: pointInDoc)
-            }
-        } else {
-            super.scrollWheel(with: event)
+    // Explicitly allow magnification to ensure pinch gestures work.
+    override func magnify(with event: NSEvent) {
+        if allowsMagnification {
+            // Let the super handle it, which is the most robust way on macOS.
+            super.magnify(with: event)
         }
     }
 }
@@ -315,39 +309,24 @@ struct NativeZoomableCanvas<Content: View>: NSViewRepresentable {
         scrollView.allowsMagnification = true 
         scrollView.magnification = 1.0
         scrollView.maxMagnification = 5.0
-        scrollView.minMagnification = 0.2
+        scrollView.minMagnification = 0.1
         scrollView.drawsBackground = false
 
         let hostingView = CanvasHostingView(rootView: content)
         hostingView.translatesAutoresizingMaskIntoConstraints = true
-        hostingView.parentScrollView = scrollView
         scrollView.documentView = hostingView
 
         context.coordinator.hostingView = hostingView
         context.coordinator.scrollView = scrollView
 
-        // Pinch Gesture Recognizer
-        let pinch = NSMagnificationGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handlePinch(_:)))
-        scrollView.addGestureRecognizer(pinch)
-
         // Click-and-drag to pan
         let pan = NSPanGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handlePan(_:)))
+        pan.buttonMask = 0x1
         scrollView.addGestureRecognizer(pan)
 
-        // Scroll to center initially
+        // Initial centering
         DispatchQueue.main.async {
-            let contentSize = hostingView.fittingSize
-            hostingView.frame = CGRect(origin: .zero, size: contentSize)
-
-            let visibleSize = scrollView.contentView.bounds.size
-            let scrollPoint = NSPoint(
-                x: (contentSize.width - visibleSize.width) / 2 + 500,
-                y: (contentSize.height - visibleSize.height) / 2
-            )
-            scrollView.contentView.scroll(to: scrollPoint)
-            
-            // Activate app once
-            NSApp.activate(ignoringOtherApps: true)
+            context.coordinator.performInitialFit()
         }
 
         return scrollView
@@ -356,30 +335,75 @@ struct NativeZoomableCanvas<Content: View>: NSViewRepresentable {
     func updateNSView(_ nsView: NSScrollView, context: Context) {
         if let hostingView = context.coordinator.hostingView {
             hostingView.rootView = content
+            
+            let newSize = hostingView.fittingSize
+            if newSize != .zero && hostingView.frame.size != newSize {
+                hostingView.frame = CGRect(origin: .zero, size: newSize)
+                
+                // If this is a significant content update, ensure it's still visible
+                if !context.coordinator.hasPerformedInitialFit && newSize.width > 2500 {
+                    context.coordinator.performInitialFit(animated: true)
+                }
+            }
         }
     }
 
     class Coordinator: NSObject {
         fileprivate weak var scrollView: CanvasScrollView?
         fileprivate weak var hostingView: CanvasHostingView<Content>?
+        fileprivate var hasPerformedInitialFit = false
         private var lastDragLocation: NSPoint = .zero
-        private var initialMagnification: CGFloat = 1.0
 
-        @objc
-        func handlePinch(_ gesture: NSMagnificationGestureRecognizer) {
-            guard let scrollView else { return }
+        func performInitialFit(animated: Bool = false) {
+            guard let scrollView = scrollView, let hostingView = hostingView else { return }
             
-            if gesture.state == .began {
-                initialMagnification = scrollView.magnification
+            let contentSize = hostingView.fittingSize
+            guard contentSize.width > 0 else { return }
+            
+            // Set frame if needed
+            hostingView.frame = CGRect(origin: .zero, size: contentSize)
+            
+            let visibleSize = scrollView.contentView.bounds.size
+            guard visibleSize.width > 0 && visibleSize.height > 0 else {
+                // If not visible yet, retry later
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+                    self?.performInitialFit(animated: animated)
+                }
+                return
             }
             
-            let newMag = max(scrollView.minMagnification, 
-                             min(scrollView.maxMagnification, 
-                                 initialMagnification * (1 + gesture.magnification)))
+            // Padding used in the SwiftUI view
+            let padding: CGFloat = 1000
             
-            if let docView = scrollView.documentView {
-                let pointInDoc = docView.convert(gesture.location(in: scrollView), from: scrollView)
-                scrollView.setMagnification(newMag, centeredAt: pointInDoc)
+            // Target the actual graph area
+            let graphRect = CGRect(
+                x: padding,
+                y: padding,
+                width: max(contentSize.width - 2 * padding, 400),
+                height: max(contentSize.height - 2 * padding, 400)
+            )
+            
+            // Calculate magnification to fit the graph area with some margin
+            let targetMag = min(
+                visibleSize.width / (graphRect.width + 100),
+                visibleSize.height / (graphRect.height + 100)
+            )
+            
+            let finalMag = max(scrollView.minMagnification, min(scrollView.maxMagnification, targetMag))
+            let centerPoint = NSPoint(x: contentSize.width / 2, y: contentSize.height / 2)
+            
+            if animated {
+                NSAnimationContext.runAnimationGroup { context in
+                    context.duration = 0.5
+                    context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                    scrollView.animator().setMagnification(finalMag, centeredAt: centerPoint)
+                }
+            } else {
+                scrollView.setMagnification(finalMag, centeredAt: centerPoint)
+            }
+            
+            if graphRect.width > 500 {
+                hasPerformedInitialFit = true
             }
         }
 
@@ -400,9 +424,12 @@ struct NativeZoomableCanvas<Content: View>: NSViewRepresentable {
                 var origin = clipView.bounds.origin
                 origin.x -= delta.x
                 origin.y -= delta.y
+                
+                // Use NSScrollView's own bound checking
                 let constrainedOrigin = clipView.constrainBoundsRect(
                     NSRect(origin: origin, size: clipView.bounds.size)
                 ).origin
+                
                 clipView.scroll(to: constrainedOrigin)
                 scrollView.reflectScrolledClipView(clipView)
 
