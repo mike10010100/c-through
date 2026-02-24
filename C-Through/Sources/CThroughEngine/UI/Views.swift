@@ -392,14 +392,26 @@ struct NativeZoomableCanvas<Content: View>: NSViewRepresentable {
             let finalMag = max(scrollView.minMagnification, min(scrollView.maxMagnification, targetMag))
             let centerPoint = NSPoint(x: contentSize.width / 2, y: contentSize.height / 2)
             
+            let finalClipSize = NSSize(
+                width: visibleSize.width / finalMag,
+                height: visibleSize.height / finalMag
+            )
+            let newOrigin = NSPoint(
+                x: max(0, centerPoint.x - finalClipSize.width / 2.0),
+                y: max(0, centerPoint.y - finalClipSize.height / 2.0)
+            )
+            
             if animated {
                 NSAnimationContext.runAnimationGroup { context in
                     context.duration = 0.5
                     context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-                    scrollView.animator().setMagnification(finalMag, centeredAt: centerPoint)
+                    scrollView.animator().magnification = finalMag
+                    scrollView.contentView.animator().setBoundsOrigin(newOrigin)
                 }
             } else {
-                scrollView.setMagnification(finalMag, centeredAt: centerPoint)
+                scrollView.magnification = finalMag
+                scrollView.contentView.scroll(to: newOrigin)
+                scrollView.reflectScrolledClipView(scrollView.contentView)
             }
             
             if graphRect.width > 500 {
