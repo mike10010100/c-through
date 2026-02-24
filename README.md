@@ -1,5 +1,7 @@
 # C-Through
 
+[![Build & Release](https://github.com/mike10010100/pretty-usb-ls/actions/workflows/build-release.yml/badge.svg)](https://github.com/mike10010100/pretty-usb-ls/actions/workflows/build-release.yml)
+
 **C-Through** is a native macOS utility designed to visualize your USB and Thunderbolt device topology and identify performance bottlenecks (the "USB-C mess").
 
 ## Features
@@ -25,22 +27,19 @@
 
 ### Building and Running
 ```bash
-cd C-Through
 swift build
 swift run
 ```
 
 ### Running Tests (including UI Snapshots)
 ```bash
-cd C-Through
 swift test --enable-code-coverage
 ```
 *Note: Snapshot tests generate PNG files in the project root for visual verification.*
 
 ### Quality Checks
 ```bash
-cd C-Through
-swiftformat . && swiftlint
+swiftlint
 ```
 
 ## Documentation
@@ -48,6 +47,6 @@ swiftformat . && swiftlint
 - [Agent Coordination (AGENTS.md)](AGENTS.md)
 
 ## Project Structure
-- `C-Through/Sources/CThroughEngine`: Core logic for IOKit discovery and the `Views` library.
-- `C-Through/Sources/C-Through`: Main application entry point.
-- `C-Through/Tests`: Comprehensive XCTest suite.
+- `Sources/CThroughEngine`: Core logic for IOKit discovery and the `Views` library.
+- `Sources/C-Through`: Main application entry point.
+- `Tests`: Comprehensive XCTest suite.
