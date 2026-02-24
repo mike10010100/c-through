@@ -1,0 +1,83 @@
+name: Build & Release
+
+on:
+  push:
+    branches: [ "main" ]
+    tags: [ "v*" ]
+  pull_request:
+    branches: [ "main" ]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build and Package
+    runs-on: macos-14
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set Swift Version
+        uses: swift-actions/setup-swift@v2
+        with:
+          swift-version: "5.9"
+
+      - name: Build Universal Binary
+        run: |
+          swift build -c release --arch arm64 --arch x86_64
+
+      - name: Create App Bundle
+        run: |
+          mkdir -p "C-Through.app/Contents/MacOS"
+          mkdir -p "C-Through.app/Contents/Resources"
+          
+          # Copy the universal binary
+          # SPM typically outputs universal binaries to .build/apple/Products/Release/
+          # or simply .build/release/ depending on flags.
+          # Let's check where it went.
+          cp .build/apple/Products/Release/C-Through "C-Through.app/Contents/MacOS/"
+          
+          # Create a minimal Info.plist
+          cat << 'EOF' > "C-Through.app/Contents/Info.plist"
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.2.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleExecutable</key>
+            <string>C-Through</string>
+            <key>CFBundleIdentifier</key>
+            <string>com.c-through.app</string>
+            <key>CFBundleName</key>
+            <string>C-Through</string>
+            <key>CFBundlePackageType</key>
+            <string>APPL</string>
+            <key>CFBundleShortVersionString</key>
+            <string>1.0.0</string>
+            <key>LSMinimumSystemVersion</key>
+            <string>14.0</string>
+            <key>NSHighResolutionCapable</key>
+            <true/>
+          </dict>
+          </plist>
+          EOF
+          
+          # Package as Zip
+          zip -r C-Through.zip C-Through.app
+
+      - name: Create Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: C-Through.zip
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload Artifact (on Push)
+        if: github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@v4
+        with:
+          name: C-Through-macOS
+          path: C-Through.zip
