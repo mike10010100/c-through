@@ -102,7 +102,7 @@ public class USBExplorer: USBExplorerProtocol {
             notifyPort,
             kIOPublishNotification,
             matchingDict,
-            { (userData, iterator) in
+            { userData, iterator in
                 let explorer = Unmanaged<USBExplorer>.fromOpaque(userData!).takeUnretainedValue()
                 while IOIteratorNext(iterator) != 0 {} // Must consume iterator
                 explorer.onChangeCallback?()
@@ -116,7 +116,7 @@ public class USBExplorer: USBExplorerProtocol {
             notifyPort,
             kIOTerminatedNotification,
             matchingDict,
-            { (userData, iterator) in
+            { userData, iterator in
                 let explorer = Unmanaged<USBExplorer>.fromOpaque(userData!).takeUnretainedValue()
                 while IOIteratorNext(iterator) != 0 {} // Must consume iterator
                 explorer.onChangeCallback?()
@@ -215,14 +215,22 @@ public class USBExplorer: USBExplorerProtocol {
     private func convertSpeed(_ speed: UInt32?) -> Double? {
         guard let speedValue = speed else { return nil }
         switch speedValue {
-        case UInt32(kUSBDeviceSpeedLow): return 1.5
-        case UInt32(kUSBDeviceSpeedFull): return 12.0
-        case UInt32(kUSBDeviceSpeedHigh): return 480.0
-        case UInt32(kUSBDeviceSpeedSuper): return 5000.0
-        case UInt32(kUSBDeviceSpeedSuperPlus): return 10000.0
-        case 5: return 20000.0 // Some controllers use 5 for Gen2x2
-        case 6: return 40000.0 // USB4 / Thunderbolt
-        default: return nil
+        case UInt32(kUSBDeviceSpeedLow):
+            return 1.5
+        case UInt32(kUSBDeviceSpeedFull):
+            return 12.0
+        case UInt32(kUSBDeviceSpeedHigh):
+            return 480.0
+        case UInt32(kUSBDeviceSpeedSuper):
+            return 5000.0
+        case UInt32(kUSBDeviceSpeedSuperPlus):
+            return 10000.0
+        case 5:
+            return 20000.0 // Some controllers use 5 for Gen2x2
+        case 6:
+            return 40000.0 // USB4 / Thunderbolt
+        default:
+            return nil
         }
     }
 }

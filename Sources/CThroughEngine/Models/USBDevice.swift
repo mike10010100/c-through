@@ -29,8 +29,8 @@ public struct USBDevice: Identifiable, Codable, Equatable {
 
     /// Whether this device represents a mass storage volume that can be ejected.
     public var canEject: Bool {
-        let n = name.lowercased()
-        return n.contains("ssd") || n.contains("drive") || n.contains("t7") || n.contains("t9") || n.contains("pssd")
+        let lowerName = name.lowercased()
+        return lowerName.contains("ssd") || lowerName.contains("drive") || lowerName.contains("t7") || lowerName.contains("t9") || lowerName.contains("pssd")
     }
 
     public init(
@@ -58,6 +58,15 @@ public struct USBDevice: Identifiable, Codable, Equatable {
     }
 
     public static func == (lhs: USBDevice, rhs: USBDevice) -> Bool {
-        return lhs.id == rhs.id
+        return lhs.id == rhs.id &&
+               lhs.name == rhs.name &&
+               lhs.manufacturer == rhs.manufacturer &&
+               lhs.vendorID == rhs.vendorID &&
+               lhs.productID == rhs.productID &&
+               lhs.serialNumber == rhs.serialNumber &&
+               lhs.negotiatedSpeedMbps == rhs.negotiatedSpeedMbps &&
+               lhs.maxCapableSpeedMbps == rhs.maxCapableSpeedMbps &&
+               lhs.isThunderbolt == rhs.isThunderbolt &&
+               lhs.children == rhs.children
     }
 }

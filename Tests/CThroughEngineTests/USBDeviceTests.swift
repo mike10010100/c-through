@@ -22,10 +22,13 @@ final class USBDeviceTests: XCTestCase {
 
     func testEquality() {
         let device1 = USBDevice(id: "1", name: "A")
-        let device2 = USBDevice(id: "1", name: "B")
-        XCTAssertEqual(device1, device2) // ID-based equality check for model
+        let device2 = USBDevice(id: "1", name: "A")
+        XCTAssertEqual(device1, device2)
 
-        let device3 = USBDevice(id: "2", name: "A")
-        XCTAssertNotEqual(device1, device3)
+        let device3 = USBDevice(id: "1", name: "B")
+        XCTAssertNotEqual(device1, device3) // Now that we check all properties
+
+        let device4 = USBDevice(id: "2", name: "A")
+        XCTAssertNotEqual(device1, device4)
     }
 }
