@@ -29,7 +29,7 @@ jobs:
 
       - name: Build Universal Binary
         run: |
-          xcodebuild -scheme C-Through -configuration Release -destination 'platform=macOS' ARCHS="arm64 x86_64"
+          xcodebuild -scheme C-Through -configuration Release -destination 'platform=macOS' ARCHS="arm64 x86_64" -derivedDataPath derived_data
 
       - name: Bump version and push tag
         id: tag_version
@@ -44,11 +44,13 @@ jobs:
           mkdir -p "C-Through.app/Contents/MacOS"
           mkdir -p "C-Through.app/Contents/Resources"
           
-          # Find the binary
-          BINARY_PATH=$(find .build -name "C-Through" -type f | grep "Release/C-Through" | head -n 1)
+          # Find the binary in our local derived data
+          BINARY_PATH=$(find derived_data -name "C-Through" -type f | grep "Release/C-Through" | head -n 1)
+          
           if [ -z "$BINARY_PATH" ]; then
-            # If xcodebuild was used, it might be in build/Release
-            BINARY_PATH=$(find build -name "C-Through" -type f | grep "Release/C-Through" | head -n 1)
+            echo "Error: Could not find binary in derived_data"
+            # Fallback search just in case
+            BINARY_PATH=$(find . -name "C-Through" -type f | grep "Release/C-Through" | head -n 1)
           fi
           
           if [ -z "$BINARY_PATH" ]; then
