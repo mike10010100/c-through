@@ -1,6 +1,6 @@
 # C-Through
 
-[![Build & Release](https://github.com/mike10010100/pretty-usb-ls/actions/workflows/build-release.yml/badge.svg)](https://github.com/mike10010100/pretty-usb-ls/actions/workflows/build-release.yml)
+[![Build & Release](https://github.com/mike10010100/c-through/actions/workflows/build-release.yml/badge.svg)](https://github.com/mike10010100/c-through/actions/workflows/build-release.yml)
 
 **C-Through** is a native macOS utility designed to visualize your USB and Thunderbolt device topology and identify performance bottlenecks (the "USB-C mess").
 
