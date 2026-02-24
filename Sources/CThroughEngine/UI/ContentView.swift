@@ -49,8 +49,8 @@ public struct ContentView: View {
                             GeometryReader { geo in
                                 let resolvedAnchors = anchors.isEmpty ? cachedAnchors : anchors
                                 ConnectionLinesView(anchors: resolvedAnchors, devices: viewModel.devices, proxy: geo)
-                                    .onChange(of: anchors.isEmpty) {
-                                        if !anchors.isEmpty { cachedAnchors = anchors }
+                                    .onChange(of: anchors.isEmpty, initial: false) { _, isEmpty in
+                                        if !isEmpty { cachedAnchors = anchors }
                                     }
                             }
                         }
@@ -86,7 +86,7 @@ public struct ContentView: View {
             }
 
             if let selected = viewModel.selectedDevice {
-                InspectorSidebar(device: selected)
+                InspectorSidebar(device: selected, viewModel: viewModel)
                     .transition(.move(edge: .trailing).combined(with: .opacity))
                     .frame(width: UIConstants.sidebarWidth)
             }

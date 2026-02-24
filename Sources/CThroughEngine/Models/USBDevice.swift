@@ -18,6 +18,12 @@ public struct USBDevice: Identifiable, Codable, Equatable {
     /// Child devices connected to this device (e.g. if this is a hub).
     public var children: [USBDevice]
 
+    /// The BSD name (e.g. disk4) if this device is a storage device.
+    public let bsdName: String?
+
+    /// The mount path if this device is a storage device.
+    public let mountPath: String?
+
     /// Whether this connection is bottlenecked by the cable or port.
     public var isBottlenecked: Bool {
         guard let actual = negotiatedSpeedMbps, let max = maxCapableSpeedMbps else { return false }
@@ -29,8 +35,7 @@ public struct USBDevice: Identifiable, Codable, Equatable {
 
     /// Whether this device represents a mass storage volume that can be ejected.
     public var canEject: Bool {
-        let lowerName = name.lowercased()
-        return lowerName.contains("ssd") || lowerName.contains("drive") || lowerName.contains("t7") || lowerName.contains("t9") || lowerName.contains("pssd")
+        return bsdName != nil || mountPath != nil
     }
 
     public init(
@@ -43,7 +48,9 @@ public struct USBDevice: Identifiable, Codable, Equatable {
         negotiatedSpeedMbps: Double? = nil,
         maxCapableSpeedMbps: Double? = nil,
         isThunderbolt: Bool = false,
-        children: [USBDevice] = []
+        children: [USBDevice] = [],
+        bsdName: String? = nil,
+        mountPath: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -55,6 +62,8 @@ public struct USBDevice: Identifiable, Codable, Equatable {
         self.maxCapableSpeedMbps = maxCapableSpeedMbps
         self.isThunderbolt = isThunderbolt
         self.children = children
+        self.bsdName = bsdName
+        self.mountPath = mountPath
     }
 
     public static func == (lhs: USBDevice, rhs: USBDevice) -> Bool {
@@ -67,6 +76,8 @@ public struct USBDevice: Identifiable, Codable, Equatable {
                lhs.negotiatedSpeedMbps == rhs.negotiatedSpeedMbps &&
                lhs.maxCapableSpeedMbps == rhs.maxCapableSpeedMbps &&
                lhs.isThunderbolt == rhs.isThunderbolt &&
-               lhs.children == rhs.children
+               lhs.children == rhs.children &&
+               lhs.bsdName == rhs.bsdName &&
+               lhs.mountPath == rhs.mountPath
     }
 }

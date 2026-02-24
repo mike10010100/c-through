@@ -2,6 +2,7 @@ import SwiftUI
 
 struct InspectorSidebar: View {
     let device: USBDevice
+    @ObservedObject var viewModel: DeviceViewModel
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             ScrollView {
@@ -32,7 +33,9 @@ struct InspectorSidebar: View {
                             .foregroundColor(.red)
                             .font(.subheadline)
 
-                            Text("This device is capable of \(Int(device.maxCapableSpeedMbps ?? 0)) Mbps but is only negotiating \(Int(device.negotiatedSpeedMbps ?? 0)) Mbps. This is likely due to an inadequate cable or hub.")
+                            Text("This device is capable of \(Int(device.maxCapableSpeedMbps ?? 0)) Mbps " +
+                                 "but is only negotiating \(Int(device.negotiatedSpeedMbps ?? 0)) Mbps. " +
+                                 "This is likely due to an inadequate cable or hub.")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                         }
@@ -54,10 +57,13 @@ struct InspectorSidebar: View {
                     InspectorSection(title: "Device Info") {
                         InspectorRow(label: "Serial Number", value: device.serialNumber ?? "N/A")
                         InspectorRow(label: "Registry ID", value: device.id)
+                        if let bsdName = device.bsdName {
+                            InspectorRow(label: "BSD Name", value: bsdName)
+                        }
                     }
 
                     if device.canEject {
-                        Button(action: { /* In a real app, call NSWorkspace.shared.unmountAndEjectDevice */ }) {
+                        Button(action: { viewModel.eject(device: device) }) {
                             HStack {
                                 Image(systemName: "eject.fill")
                                 Text("Eject Device")
@@ -75,6 +81,7 @@ struct InspectorSidebar: View {
         }
         .background(Color(NSColor.windowBackgroundColor))
         .overlay(Rectangle().fill(Color.black.opacity(0.1)).frame(width: 1), alignment: .leading)
+        .transition(.asymmetric(insertion: .move(edge: .trailing), removal: .move(edge: .trailing)))
     }
 }
 

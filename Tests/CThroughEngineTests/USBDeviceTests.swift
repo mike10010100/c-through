@@ -31,4 +31,12 @@ final class USBDeviceTests: XCTestCase {
         let device4 = USBDevice(id: "2", name: "A")
         XCTAssertNotEqual(device1, device4)
     }
+
+    func testEjectionCapability() {
+        let storageDevice = USBDevice(id: "1", name: "Disk", bsdName: "disk4", mountPath: "/Volumes/Disk")
+        XCTAssertTrue(storageDevice.canEject)
+
+        let nonStorageDevice = USBDevice(id: "2", name: "Keyboard")
+        XCTAssertFalse(nonStorageDevice.canEject)
+    }
 }

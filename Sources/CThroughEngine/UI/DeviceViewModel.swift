@@ -51,7 +51,11 @@ public class DeviceViewModel: ObservableObject {
         }
     }
 
-    private func findDevice(id: String, in devices: [USBDevice]) -> USBDevice? {
+    public func eject(device: USBDevice) {
+        explorer.eject(device: device)
+    }
+
+    public func findDevice(id: String, in devices: [USBDevice]) -> USBDevice? {
         for device in devices {
             if device.id == id { return device }
             if let found = findDevice(id: id, in: device.children) { return found }

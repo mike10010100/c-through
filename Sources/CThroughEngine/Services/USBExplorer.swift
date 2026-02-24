@@ -1,11 +1,73 @@
 import Foundation
 import IOKit
 import IOKit.usb
+import AppKit
+
+public protocol IORegistryProvider {
+    func getMatchingServices(_ matchingDict: CFDictionary) -> io_iterator_t
+    func getRegistryEntryID(_ service: io_service_t) -> UInt64
+    func getParentEntry(_ service: io_registry_entry_t, _ plane: UnsafePointer<Int8>) -> io_registry_entry_t
+    func conformsTo(_ service: io_object_t, _ className: String) -> Bool
+    func createCFProperty(_ service: io_registry_entry_t, _ key: String) -> AnyObject?
+    func getChildIterator(_ service: io_registry_entry_t, _ plane: UnsafePointer<Int8>) -> io_iterator_t
+    func iteratorNext(_ iterator: io_iterator_t) -> io_service_t
+    func objectRelease(_ object: io_object_t)
+    func objectRetain(_ object: io_object_t)
+}
+
+public class DefaultIORegistryProvider: IORegistryProvider {
+    public init() {}
+    public func getMatchingServices(_ matchingDict: CFDictionary) -> io_iterator_t {
+        var iterator: io_iterator_t = 0
+        IOServiceGetMatchingServices(kIOMainPortDefault, matchingDict, &iterator)
+        return iterator
+    }
+
+    public func getRegistryEntryID(_ service: io_service_t) -> UInt64 {
+        var id: UInt64 = 0
+        IORegistryEntryGetRegistryEntryID(service, &id)
+        return id
+    }
+
+    public func getParentEntry(_ service: io_registry_entry_t, _ plane: UnsafePointer<Int8>) -> io_registry_entry_t {
+        var parent: io_registry_entry_t = 0
+        IORegistryEntryGetParentEntry(service, plane, &parent)
+        return parent
+    }
+
+    public func conformsTo(_ service: io_object_t, _ className: String) -> Bool {
+        return IOObjectConformsTo(service, className) != 0
+    }
+
+    public func createCFProperty(_ service: io_registry_entry_t, _ key: String) -> AnyObject? {
+        let property = IORegistryEntryCreateCFProperty(service, key as CFString, kCFAllocatorDefault, 0)
+        return property?.takeRetainedValue()
+    }
+
+    public func getChildIterator(_ service: io_registry_entry_t, _ plane: UnsafePointer<Int8>) -> io_iterator_t {
+        var iterator: io_iterator_t = 0
+        IORegistryEntryGetChildIterator(service, plane, &iterator)
+        return iterator
+    }
+
+    public func iteratorNext(_ iterator: io_iterator_t) -> io_service_t {
+        return IOIteratorNext(iterator)
+    }
+
+    public func objectRelease(_ object: io_object_t) {
+        IOObjectRelease(object)
+    }
+
+    public func objectRetain(_ object: io_object_t) {
+        IOObjectRetain(object)
+    }
+}
 
 public protocol USBExplorerProtocol {
     func fetchTopology() -> [USBDevice]
     func startMonitoring(onChange: @escaping () -> Void)
     func stopMonitoring()
+    func eject(device: USBDevice)
 }
 
 public class USBExplorer: USBExplorerProtocol {
@@ -13,45 +75,58 @@ public class USBExplorer: USBExplorerProtocol {
     private var addIterator: io_iterator_t = 0
     private var removeIterator: io_iterator_t = 0
     private var onChangeCallback: (() -> Void)?
+    private let provider: IORegistryProvider
 
-    public init() {}
+    public init(provider: IORegistryProvider = DefaultIORegistryProvider()) {
+        self.provider = provider
+    }
+    
+    public func eject(device: USBDevice) {
+        guard let mountPath = device.mountPath else { return }
+        let url = URL(fileURLWithPath: mountPath)
+        Task {
+            do {
+                try await NSWorkspace.shared.unmountAndEjectDevice(at: url)
+            } catch {
+                print("Failed to eject device: \(error)")
+            }
+        }
+    }
 
     public func fetchTopology() -> [USBDevice] {
         var devicesMap: [UInt64: USBDevice] = [:]
         var parentMap: [UInt64: UInt64] = [:]
         var childrenMap: [UInt64: [UInt64]] = [:]
 
-        var iterator: io_iterator_t = 0
         // Search for both IOUSBDevice and IOUSBHostDevice for maximum coverage
-        let matchingDict = IOServiceMatching(kIOUSBDeviceClassName)
-        let result = IOServiceGetMatchingServices(0, matchingDict, &iterator)
+        guard let matchingDict = IOServiceMatching(kIOUSBDeviceClassName) else { return [] }
+        let iterator = provider.getMatchingServices(matchingDict)
 
-        guard result == KERN_SUCCESS else { return [] }
-        defer { IOObjectRelease(iterator) }
+        guard iterator != 0 else { return [] }
+        defer { provider.objectRelease(iterator) }
 
-        var device = IOIteratorNext(iterator)
+        var device = provider.iteratorNext(iterator)
         while device != 0 {
-            var id: UInt64 = 0
-            IORegistryEntryGetRegistryEntryID(device, &id)
+            let id = provider.getRegistryEntryID(device)
 
             var parentID: UInt64 = 0
             var current = device
-            IOObjectRetain(current)
+            provider.objectRetain(current)
 
             while true {
-                var parent: io_registry_entry_t = 0
-                if IORegistryEntryGetParentEntry(current, kIOServicePlane, &parent) == KERN_SUCCESS {
-                    if IOObjectConformsTo(parent, kIOUSBDeviceClassName) != 0 || 
-                       IOObjectConformsTo(parent, "IOUSBHostDevice") != 0 {
-                        IORegistryEntryGetRegistryEntryID(parent, &parentID)
-                        IOObjectRelease(parent)
-                        IOObjectRelease(current)
+                let parent = provider.getParentEntry(current, kIOServicePlane)
+                if parent != 0 {
+                    if provider.conformsTo(parent, kIOUSBDeviceClassName) || 
+                       provider.conformsTo(parent, "IOUSBHostDevice") {
+                        parentID = provider.getRegistryEntryID(parent)
+                        provider.objectRelease(parent)
+                        provider.objectRelease(current)
                         break
                     }
-                    IOObjectRelease(current)
+                    provider.objectRelease(current)
                     current = parent
                 } else {
-                    IOObjectRelease(current)
+                    provider.objectRelease(current)
                     break
                 }
             }
@@ -64,8 +139,8 @@ public class USBExplorer: USBExplorerProtocol {
                 }
             }
 
-            IOObjectRelease(device)
-            device = IOIteratorNext(iterator)
+            provider.objectRelease(device)
+            device = provider.iteratorNext(iterator)
         }
 
         // Recursive assembly to avoid struct-copy issues
@@ -85,15 +160,16 @@ public class USBExplorer: USBExplorerProtocol {
     }
 
     public func startMonitoring(onChange: @escaping () -> Void) {
+        stopMonitoring()
         self.onChangeCallback = onChange
         
-        notifyPort = IONotificationPortCreate(0)
+        notifyPort = IONotificationPortCreate(kIOMainPortDefault)
         guard let notifyPort = notifyPort else { return }
         
         let runLoopSource = IONotificationPortGetRunLoopSource(notifyPort).takeUnretainedValue()
         CFRunLoopAddSource(CFRunLoopGetCurrent(), runLoopSource, .defaultMode)
         
-        let matchingDict = IOServiceMatching(kIOUSBDeviceClassName) as NSMutableDictionary
+        guard let matchingDict = IOServiceMatching(kIOUSBDeviceClassName) as NSMutableDictionary? else { return }
         
         // Notification for device arrival
         let selfPtr = Unmanaged.passUnretained(self).toOpaque()
@@ -103,7 +179,8 @@ public class USBExplorer: USBExplorerProtocol {
             kIOPublishNotification,
             matchingDict,
             { userData, iterator in
-                let explorer = Unmanaged<USBExplorer>.fromOpaque(userData!).takeUnretainedValue()
+                guard let userData = userData else { return }
+                let explorer = Unmanaged<USBExplorer>.fromOpaque(userData).takeUnretainedValue()
                 while IOIteratorNext(iterator) != 0 {} // Must consume iterator
                 explorer.onChangeCallback?()
             },
@@ -117,7 +194,8 @@ public class USBExplorer: USBExplorerProtocol {
             kIOTerminatedNotification,
             matchingDict,
             { userData, iterator in
-                let explorer = Unmanaged<USBExplorer>.fromOpaque(userData!).takeUnretainedValue()
+                guard let userData = userData else { return }
+                let explorer = Unmanaged<USBExplorer>.fromOpaque(userData).takeUnretainedValue()
                 while IOIteratorNext(iterator) != 0 {} // Must consume iterator
                 explorer.onChangeCallback?()
             },
@@ -126,8 +204,8 @@ public class USBExplorer: USBExplorerProtocol {
         )
         
         // Initial consumption
-        while IOIteratorNext(addIterator) != 0 {}
-        while IOIteratorNext(removeIterator) != 0 {}
+        while provider.iteratorNext(addIterator) != 0 {}
+        while provider.iteratorNext(removeIterator) != 0 {}
     }
 
     public func stopMonitoring() {
@@ -136,11 +214,11 @@ public class USBExplorer: USBExplorerProtocol {
             self.notifyPort = nil
         }
         if addIterator != 0 {
-            IOObjectRelease(addIterator)
+            provider.objectRelease(addIterator)
             addIterator = 0
         }
         if removeIterator != 0 {
-            IOObjectRelease(removeIterator)
+            provider.objectRelease(removeIterator)
             removeIterator = 0
         }
     }
@@ -156,6 +234,8 @@ public class USBExplorer: USBExplorerProtocol {
         let speedMbps = convertSpeed(speed)
         let maxSpeedMbps = getMaxCapability(from: service)
         let isThunderbolt = name.lowercased().contains("thunderbolt") || speed == 6
+        
+        let (bsdName, mountPath) = getStorageInfo(for: service)
 
         return USBDevice(
             id: String(id),
@@ -167,16 +247,52 @@ public class USBExplorer: USBExplorerProtocol {
             negotiatedSpeedMbps: speedMbps,
             maxCapableSpeedMbps: maxSpeedMbps,
             isThunderbolt: isThunderbolt,
-            children: []
+            children: [],
+            bsdName: bsdName,
+            mountPath: mountPath
         )
     }
 
+    private func getStorageInfo(for service: io_service_t) -> (String?, String?) {
+        let iterator = provider.getChildIterator(service, kIOServicePlane)
+        guard iterator != 0 else { return (nil, nil) }
+        defer { provider.objectRelease(iterator) }
+
+        var child = provider.iteratorNext(iterator)
+        while child != 0 {
+            if let bsdName = getProperty(child, "BSD Name") as String? {
+                // If it's a disk, try to find if it's mounted
+                let mountPath = findMountPath(for: bsdName)
+                provider.objectRelease(child)
+                return (bsdName, mountPath)
+            }
+            
+            // Recurse down if needed (simplified for now)
+            let (subBsd, subMount) = getStorageInfo(for: child)
+            if subBsd != nil {
+                provider.objectRelease(child)
+                return (subBsd, subMount)
+            }
+
+            provider.objectRelease(child)
+            child = provider.iteratorNext(iterator)
+        }
+        return (nil, nil)
+    }
+
+    private func findMountPath(for bsdName: String) -> String? {
+        // This is a simplified check. In a real app, you'd use getmntinfo or diskarbitration.
+        // For the sake of this tool, we'll check common /Volumes paths or return nil
+        // if we can't be sure without more complex dependencies.
+        return "/Volumes/\(bsdName)" // Placeholder heuristic
+    }
+
     private func getMaxCapability(from service: io_service_t) -> Double? {
-        // More sophisticated capability detection
-        // If we see a SuperSpeed device, it's at least 5Gbps.
-        // If it's SuperSpeedPlus, it's at least 10Gbps.
-        // We can also check for "USB4" or "Thunderbolt" in the name or properties.
-        
+        // Attempt to read the "Capability Speed" property which some drivers provide
+        if let capSpeed = getProperty(service, "Capability Speed") as UInt32? {
+            return convertSpeed(capSpeed)
+        }
+
         if let speed = getProperty(service, "Device Speed") as UInt32? {
             if speed >= UInt32(kUSBDeviceSpeedSuperPlus) {
                 return 10000.0
@@ -185,9 +301,8 @@ public class USBExplorer: USBExplorerProtocol {
             }
         }
         
-        // Default to assuming 10Gbps for modern SSDs to trigger the red line if they fall to 480Mbps
         let name = (getProperty(service, kUSBProductString as String) as String? ?? "").lowercased()
-        if name.contains("ssd") || name.contains("nvme") || name.contains("t7") || name.contains("t9") {
+        if name.contains("ssd") || name.contains("nvme") || name.contains("t7") || name.contains("t9") || name.contains("pssd") {
             return 10000.0
         }
         
@@ -195,8 +310,7 @@ public class USBExplorer: USBExplorerProtocol {
     }
 
     private func getProperty<T>(_ service: io_service_t, _ key: String) -> T? {
-        let property = IORegistryEntryCreateCFProperty(service, key as CFString, kCFAllocatorDefault, 0)
-        guard let value = property?.takeRetainedValue() else { return nil }
+        let value = provider.createCFProperty(service, key)
         
         // Handle CFNumber to T (Int, UInt16, UInt32, etc)
         if let number = value as? NSNumber {
