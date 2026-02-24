@@ -121,42 +121,24 @@ public struct ContentView: View {
 
 // MARK: - AppKit Subclasses
 
-/// NSHostingView subclass that forwards magnify (pinch) events to its parent scroll view
-/// instead of letting SwiftUI consume them silently.
+/// NSHostingView subclass that avoids swallowing gestures we want to handle ourselves.
 private class CanvasHostingView<Content: View>: NSHostingView<Content> {
     weak var parentScrollView: CanvasScrollView?
-
-    override func magnify(with event: NSEvent) {
-        if let parentScrollView {
-            parentScrollView.magnify(with: event)
-        } else {
-            super.magnify(with: event)
-        }
-    }
 }
 
 private class CanvasScrollView: NSScrollView {
     override func scrollWheel(with event: NSEvent) {
         if event.modifierFlags.contains(.command) {
             let delta = event.scrollingDeltaY
-            let factor = delta > 0 ? 1.05 : 0.95
+            let factor = delta > 0 ? 1.1 : 0.9
             let newMag = max(minMagnification, min(maxMagnification, magnification * factor))
             
-            // Native setMagnification expects a point in the DOCUMENT view's coordinate system
             if let docView = documentView {
                 let pointInDoc = docView.convert(event.locationInWindow, from: nil)
                 setMagnification(newMag, centeredAt: pointInDoc)
             }
         } else {
             super.scrollWheel(with: event)
-        }
-    }
-
-    override func magnify(with event: NSEvent) {
-        let newMag = max(minMagnification, min(maxMagnification, magnification * (1 + event.magnification)))
-        if let docView = documentView {
-            let pointInDoc = docView.convert(event.locationInWindow, from: nil)
-            setMagnification(newMag, centeredAt: pointInDoc)
         }
     }
 }
@@ -171,22 +153,15 @@ struct NativeZoomableCanvas<Content: View>: NSViewRepresentable {
     }
 
     func makeNSView(context: Context) -> NSScrollView {
-        // Bring app to front (diagnostic for the "backgrounding" issue)
-        NSApp.activate(ignoringOtherApps: true)
-
         let scrollView = CanvasScrollView()
         scrollView.hasVerticalScroller = false
         scrollView.hasHorizontalScroller = false
-
-        // Re-enable native magnification support but we still override the triggers
-        scrollView.allowsMagnification = true
+        scrollView.allowsMagnification = true 
         scrollView.magnification = 1.0
         scrollView.maxMagnification = 5.0
         scrollView.minMagnification = 0.2
         scrollView.drawsBackground = false
 
-        // Use CanvasHostingView (forwards magnify events to scroll view) as documentView
-        // with frame-based layout so magnification transforms aren't fought by Auto Layout.
         let hostingView = CanvasHostingView(rootView: content)
         hostingView.translatesAutoresizingMaskIntoConstraints = true
         hostingView.parentScrollView = scrollView
@@ -195,7 +170,15 @@ struct NativeZoomableCanvas<Content: View>: NSViewRepresentable {
         context.coordinator.hostingView = hostingView
         context.coordinator.scrollView = scrollView
 
-        // Scroll to center initially so the user starts at the MacBook
+        // Pinch Gesture Recognizer
+        let pinch = NSMagnificationGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handlePinch(_:)))
+        scrollView.addGestureRecognizer(pinch)
+
+        // Click-and-drag to pan
+        let pan = NSPanGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handlePan(_:)))
+        scrollView.addGestureRecognizer(pan)
+
+        // Scroll to center initially
         DispatchQueue.main.async {
             let contentSize = hostingView.fittingSize
             hostingView.frame = CGRect(origin: .zero, size: contentSize)
@@ -206,11 +189,10 @@ struct NativeZoomableCanvas<Content: View>: NSViewRepresentable {
                 y: (contentSize.height - visibleSize.height) / 2
             )
             scrollView.contentView.scroll(to: scrollPoint)
+            
+            // Activate app once
+            NSApp.activate(ignoringOtherApps: true)
         }
-
-        // Click-and-drag to pan
-        let pan = NSPanGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handlePan(_:)))
-        scrollView.addGestureRecognizer(pan)
 
         return scrollView
     }
@@ -225,6 +207,25 @@ struct NativeZoomableCanvas<Content: View>: NSViewRepresentable {
         fileprivate weak var scrollView: CanvasScrollView?
         fileprivate weak var hostingView: CanvasHostingView<Content>?
         private var lastDragLocation: NSPoint = .zero
+        private var initialMagnification: CGFloat = 1.0
+
+        @objc
+        func handlePinch(_ gesture: NSMagnificationGestureRecognizer) {
+            guard let scrollView else { return }
+            
+            if gesture.state == .began {
+                initialMagnification = scrollView.magnification
+            }
+            
+            let newMag = max(scrollView.minMagnification, 
+                             min(scrollView.maxMagnification, 
+                                 initialMagnification * (1 + gesture.magnification)))
+            
+            if let docView = scrollView.documentView {
+                let pointInDoc = docView.convert(gesture.location(in: scrollView), from: scrollView)
+                scrollView.setMagnification(newMag, centeredAt: pointInDoc)
+            }
+        }
 
         @objc
         func handlePan(_ gesture: NSPanGestureRecognizer) {
@@ -241,8 +242,6 @@ struct NativeZoomableCanvas<Content: View>: NSViewRepresentable {
 
                 let clipView = scrollView.contentView
                 var origin = clipView.bounds.origin
-                // NSScrollView is non-flipped (Y increases upward), so drag-down gives negative
-                // delta.y. Subtracting it increases origin.y, which scrolls the flipped clip view down.
                 origin.x -= delta.x
                 origin.y -= delta.y
                 let constrainedOrigin = clipView.constrainBoundsRect(
@@ -255,7 +254,6 @@ struct NativeZoomableCanvas<Content: View>: NSViewRepresentable {
                 break
             }
         }
-
     }
 }
 
