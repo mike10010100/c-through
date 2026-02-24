@@ -3,7 +3,6 @@ name: Build & Release
 on:
   push:
     branches: [ "main" ]
-    tags: [ "v*" ]
   pull_request:
     branches: [ "main" ]
 
@@ -17,15 +16,28 @@ jobs:
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Required for tagging
 
       - name: Set Swift Version
         uses: swift-actions/setup-swift@v2
         with:
           swift-version: "5.9"
 
+      - name: Run Tests
+        run: swift test
+
       - name: Build Universal Binary
         run: |
           swift build -c release --arch arm64 --arch x86_64
+
+      - name: Bump version and push tag
+        id: tag_version
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: mathieudutour/github-tag-action@v6.1
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          default_bump: patch
 
       - name: Create App Bundle
         run: |
@@ -33,13 +45,13 @@ jobs:
           mkdir -p "C-Through.app/Contents/Resources"
           
           # Copy the universal binary
-          # SPM typically outputs universal binaries to .build/apple/Products/Release/
-          # or simply .build/release/ depending on flags.
-          # Let's check where it went.
           cp .build/apple/Products/Release/C-Through "C-Through.app/Contents/MacOS/"
           
+          # Use the new version tag if available, otherwise default to 1.0.0
+          VERSION="${{ steps.tag_version.outputs.new_version || '1.0.0' }}"
+          
           # Create a minimal Info.plist
-          cat << 'EOF' > "C-Through.app/Contents/Info.plist"
+          cat << EOF > "C-Through.app/Contents/Info.plist"
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.2.dtd">
           <plist version="1.0">
@@ -53,7 +65,7 @@ jobs:
             <key>CFBundlePackageType</key>
             <string>APPL</string>
             <key>CFBundleShortVersionString</key>
-            <string>1.0.0</string>
+            <string>$VERSION</string>
             <key>LSMinimumSystemVersion</key>
             <string>14.0</string>
             <key>NSHighResolutionCapable</key>
@@ -66,18 +78,21 @@ jobs:
           zip -r C-Through.zip C-Through.app
 
       - name: Create Release
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.tag_version.outputs.new_tag }}
+          name: Release ${{ steps.tag_version.outputs.new_tag }}
+          body: ${{ steps.tag_version.outputs.changelog }}
           files: C-Through.zip
           draft: false
           prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Upload Artifact (on Push)
-        if: github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/v')
+      - name: Upload Artifact (on Pull Request)
+        if: github.event_name == 'pull_request'
         uses: actions/upload-artifact@v4
         with:
-          name: C-Through-macOS
+          name: C-Through-macOS-PR
           path: C-Through.zip
