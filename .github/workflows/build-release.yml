@@ -57,12 +57,14 @@ jobs:
             echo "Error: Could not find binary"
             exit 1
           fi
+          
           cp "$BINARY_PATH" "C-Through.app/Contents/MacOS/"
+          chmod +x "C-Through.app/Contents/MacOS/C-Through"
           
           # Use the new version tag if available, otherwise default to 1.0.0
           VERSION="${{ steps.tag_version.outputs.new_version || '1.0.0' }}"
           
-          # Create a minimal Info.plist
+          # Create a more complete Info.plist
           cat << EOF > "C-Through.app/Contents/Info.plist"
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.2.dtd">
@@ -72,22 +74,35 @@ jobs:
             <string>C-Through</string>
             <key>CFBundleIdentifier</key>
             <string>com.c-through.app</string>
+            <key>CFBundleInfoDictionaryVersion</key>
+            <string>6.0</string>
             <key>CFBundleName</key>
             <string>C-Through</string>
             <key>CFBundlePackageType</key>
             <string>APPL</string>
             <key>CFBundleShortVersionString</key>
             <string>$VERSION</string>
+            <key>CFBundleVersion</key>
+            <string>1</string>
             <key>LSMinimumSystemVersion</key>
             <string>14.0</string>
             <key>NSHighResolutionCapable</key>
             <true/>
+            <key>LSApplicationCategoryType</key>
+            <string>public.app-category.utilities</string>
           </dict>
           </plist>
           EOF
           
-          # Package as Zip
-          zip -r C-Through.zip C-Through.app
+          # Add PkgInfo
+          echo -n "APPL????" > "C-Through.app/Contents/PkgInfo"
+          
+          # Ad-hoc sign the app bundle. This is required for Silicon Macs to run binaries 
+          # even if they aren't from a verified developer.
+          codesign --force --deep --sign - "C-Through.app"
+          
+          # Package as Zip using ditto to preserve resource forks and permissions
+          ditto -c -k --sequesterRsrc --keepParent "C-Through.app" C-Through.zip
 
       - name: Create Release
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
