@@ -24,6 +24,15 @@ public struct USBDevice: Identifiable, Codable, Equatable {
         return actual < max
     }
 
+    /// Whether this is a Thunderbolt connection.
+    public let isThunderbolt: Bool
+
+    /// Whether this device represents a mass storage volume that can be ejected.
+    public var canEject: Bool {
+        let n = name.lowercased()
+        return n.contains("ssd") || n.contains("drive") || n.contains("t7") || n.contains("t9") || n.contains("pssd")
+    }
+
     public init(
         id: String,
         name: String,
@@ -33,6 +42,7 @@ public struct USBDevice: Identifiable, Codable, Equatable {
         serialNumber: String? = nil,
         negotiatedSpeedMbps: Double? = nil,
         maxCapableSpeedMbps: Double? = nil,
+        isThunderbolt: Bool = false,
         children: [USBDevice] = []
     ) {
         self.id = id
@@ -43,6 +53,7 @@ public struct USBDevice: Identifiable, Codable, Equatable {
         self.serialNumber = serialNumber
         self.negotiatedSpeedMbps = negotiatedSpeedMbps
         self.maxCapableSpeedMbps = maxCapableSpeedMbps
+        self.isThunderbolt = isThunderbolt
         self.children = children
     }
 

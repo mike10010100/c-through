@@ -41,7 +41,7 @@ final class UISnapshotTests: XCTestCase {
                 HStack(alignment: .center, spacing: 200) {
                     VStack(alignment: .trailing, spacing: 80) {
                         ForEach(viewModel.devices) { device in
-                            DeviceTreeBranch(device: device)
+                            DeviceTreeBranch(device: device, viewModel: viewModel)
                         }
                     }
                     HostMacBookNode()

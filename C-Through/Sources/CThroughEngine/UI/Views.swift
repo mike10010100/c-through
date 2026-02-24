@@ -22,15 +22,43 @@ public struct DeviceAnchorKey: PreferenceKey {
 
 public class DeviceViewModel: ObservableObject {
     @Published public var devices: [USBDevice] = []
+    @Published public var selectedDevice: USBDevice?
     private let explorer: USBExplorerProtocol
+    private let queue = DispatchQueue(label: "com.c-through.explorer", qos: .userInitiated)
 
     public init(explorer: USBExplorerProtocol) {
         self.explorer = explorer
         refresh()
+        explorer.startMonitoring { [weak self] in
+            self?.refresh()
+        }
+    }
+
+    deinit {
+        explorer.stopMonitoring()
     }
 
     public func refresh() {
-        devices = explorer.fetchTopology()
+        queue.async {
+            let fetched = self.explorer.fetchTopology()
+            DispatchQueue.main.async {
+                withAnimation(.spring(response: 0.5, dampingFraction: 0.7)) {
+                    self.devices = fetched
+                    // Update selected device if it still exists
+                    if let selected = self.selectedDevice {
+                        self.selectedDevice = self.findDevice(id: selected.id, in: fetched)
+                    }
+                }
+            }
+        }
+    }
+
+    private func findDevice(id: String, in devices: [USBDevice]) -> USBDevice? {
+        for device in devices {
+            if device.id == id { return device }
+            if let found = findDevice(id: id, in: device.children) { return found }
+        }
+        return nil
     }
 }
 
@@ -45,77 +73,205 @@ public struct ContentView: View {
     }
 
     public var body: some View {
-        ZStack {
-            Color(NSColor.windowBackgroundColor).ignoresSafeArea()
+        HStack(spacing: 0) {
+            ZStack {
+                Color(NSColor.windowBackgroundColor).ignoresSafeArea()
 
-            GeometryReader { proxy in
-                NativeZoomableCanvas {
-                    ZStack {
-                        // Dynamically size to at least the window, but allow expanding
-                        Color.clear.frame(
-                            minWidth: proxy.size.width,
-                            minHeight: proxy.size.height
-                        )
+                GeometryReader { proxy in
+                    NativeZoomableCanvas {
+                        ZStack {
+                            Color.clear.frame(
+                                minWidth: proxy.size.width,
+                                minHeight: proxy.size.height
+                            )
 
-                        // THE CONTENT
-                        HStack(alignment: .center, spacing: 200) {
-                            VStack(alignment: .trailing, spacing: 80) {
-                                if viewModel.devices.isEmpty {
-                                    Text("No USB devices found.").foregroundColor(.secondary)
-                                } else {
-                                    ForEach(viewModel.devices) { device in
-                                        DeviceTreeBranch(device: device)
+                            HStack(alignment: .center, spacing: 200) {
+                                VStack(alignment: .trailing, spacing: 80) {
+                                    if viewModel.devices.isEmpty {
+                                        Text("No USB devices found.").foregroundColor(.secondary)
+                                    } else {
+                                        ForEach(viewModel.devices) { device in
+                                            DeviceTreeBranch(device: device, viewModel: viewModel)
+                                        }
                                     }
                                 }
+
+                                HostMacBookNode()
+                                    .anchorPreference(key: DeviceAnchorKey.self, value: .bounds) {
+                                        [DeviceAnchorData(id: "HOST", bounds: $0)]
+                                    }
                             }
-
-                            HostMacBookNode()
-                                .anchorPreference(key: DeviceAnchorKey.self, value: .bounds) {
-                                    [DeviceAnchorData(id: "HOST", bounds: $0)]
-                                }
                         }
-                    }
-                    .contentShape(Rectangle()) // Ensure the entire padded area is interactive
-                    // Generous padding creates the "infinite canvas" feel around the content
-                    .padding(1000)
-                    .backgroundPreferenceValue(DeviceAnchorKey.self) { anchors in
-                        GeometryReader { geo in
-                            // Use cached anchors when current ones are empty (happens during
-                            // a refresh re-render before preferences are repopulated).
-                            let resolvedAnchors = anchors.isEmpty ? cachedAnchors : anchors
-                            ConnectionLinesView(anchors: resolvedAnchors, devices: viewModel.devices, proxy: geo)
-                                .onChange(of: anchors.isEmpty) {
-                                    if !anchors.isEmpty { cachedAnchors = anchors }
-                                }
+                        .contentShape(Rectangle())
+                        .padding(1000)
+                        .backgroundPreferenceValue(DeviceAnchorKey.self) { anchors in
+                            GeometryReader { geo in
+                                let resolvedAnchors = anchors.isEmpty ? cachedAnchors : anchors
+                                ConnectionLinesView(anchors: resolvedAnchors, devices: viewModel.devices, proxy: geo)
+                                    .onChange(of: anchors.isEmpty) {
+                                        if !anchors.isEmpty { cachedAnchors = anchors }
+                                    }
+                            }
                         }
                     }
                 }
-            }
 
-            // Overlays (floating UI)
-            VStack {
-                Spacer()
-                HStack {
-                    LegendBox().padding(20)
+                // Overlays
+                VStack {
                     Spacer()
-                }
-            }
-
-            VStack {
-                HStack {
-                    Spacer()
-                    Button(action: viewModel.refresh) {
-                        Image(systemName: "arrow.clockwise")
-                            .font(.system(size: 14, weight: .bold))
-                            .padding(10)
-                            .background(Circle().fill(.ultraThinMaterial))
+                    HStack {
+                        LegendBox().padding(20)
+                        Spacer()
                     }
-                    .buttonStyle(.plain)
-                    .padding(30)
                 }
-                Spacer()
+
+                VStack {
+                    HStack {
+                        Spacer()
+                        Button(action: { viewModel.refresh() }) {
+                            Image(systemName: "arrow.clockwise")
+                                .font(.system(size: 14, weight: .bold))
+                                .padding(10)
+                                .background(Circle().fill(.ultraThinMaterial))
+                        }
+                        .buttonStyle(.plain)
+                        .padding(30)
+                    }
+                    Spacer()
+                }
+            }
+            .onTapGesture {
+                withAnimation { viewModel.selectedDevice = nil }
+            }
+
+            if let selected = viewModel.selectedDevice {
+                InspectorSidebar(device: selected)
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
+                    .frame(width: 320)
             }
         }
+    }
+}
+
+// MARK: - Inspector
+
+struct InspectorSidebar: View {
+    let device: USBDevice
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 24) {
+                    HStack {
+                        ZStack {
+                            RoundedRectangle(cornerRadius: 12)
+                                .fill(Color.blue)
+                                .frame(width: 56, height: 56)
+                            Image(systemName: iconFor(device))
+                                .font(.system(size: 28))
+                                .foregroundColor(.white)
+                        }
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(device.name).font(.headline).lineLimit(2)
+                            Text(device.manufacturer ?? "Unknown Manufacturer")
+                                .font(.subheadline).foregroundColor(.secondary)
+                        }
+                    }
+                    .padding(.top, 20)
+
+                    if device.isBottlenecked {
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Image(systemName: "exclamationmark.triangle.fill")
+                                Text("Performance Bottleneck").bold()
+                            }
+                            .foregroundColor(.red)
+                            .font(.subheadline)
+
+                            Text("This device is capable of \(Int(device.maxCapableSpeedMbps ?? 0)) Mbps but is only negotiating \(Int(device.negotiatedSpeedMbps ?? 0)) Mbps. This is likely due to an inadequate cable or hub.")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                        .padding()
+                        .background(RoundedRectangle(cornerRadius: 12).fill(Color.red.opacity(0.1)))
+                    }
+
+                    InspectorSection(title: "Connection Details") {
+                        InspectorRow(label: "Negotiated Speed", value: formatSpeed(device.negotiatedSpeedMbps))
+                        InspectorRow(label: "Max Capability", value: formatSpeed(device.maxCapableSpeedMbps))
+                        if let vendorID = device.vendorID {
+                            InspectorRow(label: "Vendor ID", value: String(format: "0x%04X", vendorID))
+                        }
+                        if let productID = device.productID {
+                            InspectorRow(label: "Product ID", value: String(format: "0x%04X", productID))
+                        }
+                    }
+
+                    InspectorSection(title: "Device Info") {
+                        InspectorRow(label: "Serial Number", value: device.serialNumber ?? "N/A")
+                        InspectorRow(label: "Registry ID", value: device.id)
+                    }
+
+                    if device.canEject {
+                        Button(action: { /* In a real app, call NSWorkspace.shared.unmountAndEjectDevice */ }) {
+                            HStack {
+                                Image(systemName: "eject.fill")
+                                Text("Eject Device")
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                            .background(RoundedRectangle(cornerRadius: 10).fill(Color.secondary.opacity(0.1)))
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.top, 8)
+                    }
+                }
+                .padding(20)
+            }
+        }
+        .background(Color(NSColor.windowBackgroundColor))
+        .overlay(Rectangle().fill(Color.black.opacity(0.1)).frame(width: 1), alignment: .leading)
+    }
+
+    private func formatSpeed(_ mbps: Double?) -> String {
+        guard let mbps = mbps else { return "Unknown" }
+        if mbps >= 1000 {
+            return String(format: "%.1f Gbps", mbps / 1000.0)
+        }
+        return "\(Int(mbps)) Mbps"
+    }
+}
+
+struct InspectorSection<Content: View>: View {
+    let title: String
+    let content: Content
+    init(title: String, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.content = content()
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(title).font(.caption).bold().foregroundColor(.secondary).textCase(.uppercase)
+            VStack(spacing: 0) {
+                content
+            }
+            .background(RoundedRectangle(cornerRadius: 10).fill(Color(NSColor.controlBackgroundColor)))
+        }
+    }
+}
+
+struct InspectorRow: View {
+    let label: String
+    let value: String
+    var body: some View {
+        HStack {
+            Text(label).foregroundColor(.secondary)
+            Spacer()
+            Text(value).bold()
+        }
+        .font(.system(size: 12))
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        Divider().padding(.leading, 12).opacity(0.5)
     }
 }
 
@@ -296,6 +452,12 @@ struct ConnectionLinesView: View {
 
                 context.stroke(path, with: .color(color), lineWidth: thickness)
 
+                // Thunderbolt indicator (placed near the host/parent side of the cable)
+                if device.isThunderbolt {
+                    let iconPoint = CGPoint(x: p1.x + (p2.x - p1.x) * 0.8, y: p2.y)
+                    context.draw(Image(systemName: "bolt.fill"), at: iconPoint, anchor: .center)
+                }
+
                 drawLines(for: device.children, to: device.id, in: &context)
             }
         }
@@ -315,16 +477,22 @@ struct ConnectionLinesView: View {
 
 struct DeviceTreeBranch: View {
     let device: USBDevice
+    @ObservedObject var viewModel: DeviceViewModel
     var body: some View {
         HStack(alignment: .center, spacing: 150) {
             if !device.children.isEmpty {
                 VStack(alignment: .trailing, spacing: 40) {
                     ForEach(device.children) { child in
-                        DeviceTreeBranch(device: child)
+                        DeviceTreeBranch(device: child, viewModel: viewModel)
                     }
                 }
             }
-            DeviceCardView(device: device)
+            DeviceCardView(device: device, isSelected: viewModel.selectedDevice?.id == device.id)
+                .onTapGesture {
+                    withAnimation(.spring(response: 0.3)) {
+                        viewModel.selectedDevice = device
+                    }
+                }
                 .anchorPreference(key: DeviceAnchorKey.self, value: .bounds) {
                     [DeviceAnchorData(id: device.id, bounds: $0)]
                 }
@@ -334,6 +502,7 @@ struct DeviceTreeBranch: View {
 
 struct DeviceCardView: View {
     let device: USBDevice
+    let isSelected: Bool
     var body: some View {
         HStack(spacing: 0) {
             ZStack {
@@ -364,24 +533,25 @@ struct DeviceCardView: View {
         .overlay(
             RoundedRectangle(cornerRadius: 14)
                 .stroke(
-                    device.isBottlenecked ? Color.red : Color.white.opacity(0.1),
-                    lineWidth: device.isBottlenecked ? 2 : 1
+                    isSelected ? Color.blue : (device.isBottlenecked ? Color.red : Color.white.opacity(0.1)),
+                    lineWidth: (isSelected || device.isBottlenecked) ? 2 : 1
                 )
         )
-        .shadow(color: .black.opacity(0.2), radius: 8, y: 4)
+        .shadow(color: .black.opacity(isSelected ? 0.3 : 0.2), radius: isSelected ? 12 : 8, y: 4)
+        .scaleEffect(isSelected ? 1.02 : 1.0)
     }
+}
 
-    private func iconFor(_ device: USBDevice) -> String {
-        let name = device.name.lowercased()
-        if name.contains("hub") { return "cable.connector" }
-        if name.contains("ssd") || name.contains("drive") { return "externaldrive.fill" }
-        if name.contains("keyboard") { return "keyboard.fill" }
-        if name.contains("mouse") || name.contains("trackpad") || name.contains("receiver") { return "mouse.fill" }
-        if name.contains("display") { return "desktopcomputer" }
-        if name.contains("camera") || name.contains("brio") { return "camera.fill" }
-        if name.contains("mic") || name.contains("yeti") { return "mic.fill" }
-        return "usb.fill"
-    }
+private func iconFor(_ device: USBDevice) -> String {
+    let name = device.name.lowercased()
+    if name.contains("hub") { return "cable.connector" }
+    if name.contains("ssd") || name.contains("drive") || name.contains("external") { return "externaldrive.fill" }
+    if name.contains("keyboard") { return "keyboard.fill" }
+    if name.contains("mouse") || name.contains("trackpad") || name.contains("receiver") { return "mouse.fill" }
+    if name.contains("display") || name.contains("monitor") { return "desktopcomputer" }
+    if name.contains("camera") || name.contains("brio") || name.contains("video") { return "camera.fill" }
+    if name.contains("mic") || name.contains("yeti") || name.contains("audio") { return "mic.fill" }
+    return "usb.fill"
 }
 
 struct HostMacBookNode: View {

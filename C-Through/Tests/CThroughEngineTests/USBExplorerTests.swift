@@ -7,6 +7,9 @@ class MockUSBExplorer: USBExplorerProtocol {
     func fetchTopology() -> [USBDevice] {
         return mockDevices
     }
+    
+    func startMonitoring(onChange: @escaping () -> Void) {}
+    func stopMonitoring() {}
 }
 
 final class USBExplorerTests: XCTestCase {
