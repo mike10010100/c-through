@@ -6,7 +6,7 @@ extension View {
         let hostingView = NSHostingView(rootView: self)
         hostingView.frame = CGRect(origin: .zero, size: size)
 
-        let bitmap = hostingView.bitmapImageRepForCachingDisplay(in: hostingView.bounds)!
+        guard let bitmap = hostingView.bitmapImageRepForCachingDisplay(in: hostingView.bounds) else { return nil }
         bitmap.size = hostingView.bounds.size
         hostingView.cacheDisplay(in: hostingView.bounds, to: bitmap)
 

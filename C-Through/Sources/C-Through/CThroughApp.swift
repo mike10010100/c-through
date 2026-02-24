@@ -18,7 +18,7 @@ struct CThroughApp: App {
                     .keyboardShortcut("r", modifiers: .command)
             }
             CommandMenu("View") {
-                Button("Zoom In") { /* Zoom logic usually handled by NSScrollView, but we can add triggers here if needed */ }
+                Button("Zoom In") { /* Handled by NSScrollView */ }
                     .keyboardShortcut("+", modifiers: .command)
                 Button("Zoom Out") {}
                     .keyboardShortcut("-", modifiers: .command)

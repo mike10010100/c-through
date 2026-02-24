@@ -1,5 +1,4 @@
 import AppKit
-import CThroughEngine
 import SwiftUI
 
 // MARK: - Preferences
@@ -39,6 +38,7 @@ public class DeviceViewModel: ObservableObject {
 
 public struct ContentView: View {
     @ObservedObject var viewModel: DeviceViewModel
+    @State private var cachedAnchors: [DeviceAnchorData] = []
 
     public init(viewModel: DeviceViewModel) {
         self.viewModel = viewModel
@@ -79,7 +79,13 @@ public struct ContentView: View {
                     .padding(1000)
                     .backgroundPreferenceValue(DeviceAnchorKey.self) { anchors in
                         GeometryReader { geo in
-                            ConnectionLinesView(anchors: anchors, devices: viewModel.devices, proxy: geo)
+                            // Use cached anchors when current ones are empty (happens during
+                            // a refresh re-render before preferences are repopulated).
+                            let resolvedAnchors = anchors.isEmpty ? cachedAnchors : anchors
+                            ConnectionLinesView(anchors: resolvedAnchors, devices: viewModel.devices, proxy: geo)
+                                .onChange(of: anchors.isEmpty) {
+                                    if !anchors.isEmpty { cachedAnchors = anchors }
+                                }
                         }
                     }
                 }
@@ -89,7 +95,7 @@ public struct ContentView: View {
             VStack {
                 Spacer()
                 HStack {
-                    LegendBox().padding(40)
+                    LegendBox().padding(20)
                     Spacer()
                 }
             }
@@ -112,44 +118,127 @@ public struct ContentView: View {
     }
 }
 
-// MARK: - Native Zoomable Canvas (The Core fix)
+// MARK: - AppKit Subclasses
+
+/// NSHostingView subclass that forwards magnify (pinch) events to its parent scroll view
+/// instead of letting SwiftUI consume them silently.
+private class CanvasHostingView<Content: View>: NSHostingView<Content> {
+    weak var parentScrollView: CanvasScrollView?
+
+    override func magnify(with event: NSEvent) {
+        parentScrollView?.magnify(with: event)
+    }
+}
+
+private class CanvasScrollView: NSScrollView {
+    override func scrollWheel(with event: NSEvent) {
+        if event.modifierFlags.contains(.command) {
+            let delta = event.scrollingDeltaY
+            let factor = delta > 0 ? 1.05 : 0.95
+            let newMag = max(minMagnification, min(maxMagnification, magnification * factor))
+            setMagnification(newMag, centeredAt: convert(event.locationInWindow, from: nil))
+        } else {
+            super.scrollWheel(with: event)
+        }
+    }
+
+    override func magnify(with event: NSEvent) {
+        let rawMag = magnification * (1 + event.magnification)
+        let newMag = max(minMagnification, min(maxMagnification, rawMag))
+        setMagnification(newMag, centeredAt: convert(event.locationInWindow, from: nil))
+    }
+}
+
+// MARK: - Native Zoomable Canvas
 
 struct NativeZoomableCanvas<Content: View>: NSViewRepresentable {
     @ViewBuilder let content: Content
 
-    func makeNSView(context _: Context) -> NSScrollView {
-        let scrollView = NSScrollView()
-        // Best practice: hide scroll indicators for an "infinite canvas" feel like Freeform/Figma
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scrollView = CanvasScrollView()
         scrollView.hasVerticalScroller = false
         scrollView.hasHorizontalScroller = false
-
-        scrollView.allowsMagnification = true // Natively handles trackpad pinch & Cmd+Scroll
+        scrollView.allowsMagnification = true
         scrollView.magnification = 1.0
         scrollView.maxMagnification = 5.0
         scrollView.minMagnification = 0.2
         scrollView.drawsBackground = false
 
-        let hostingView = NSHostingView(rootView: content)
-        hostingView.translatesAutoresizingMaskIntoConstraints = false
+        // Use CanvasHostingView (forwards magnify events to scroll view) as documentView
+        // with frame-based layout so magnification transforms aren't fought by Auto Layout.
+        let hostingView = CanvasHostingView(rootView: content)
+        hostingView.translatesAutoresizingMaskIntoConstraints = true
+        hostingView.parentScrollView = scrollView
         scrollView.documentView = hostingView
+
+        context.coordinator.hostingView = hostingView
+        context.coordinator.scrollView = scrollView
 
         // Scroll to center initially so the user starts at the MacBook
         DispatchQueue.main.async {
-            hostingView.layoutSubtreeIfNeeded()
-            let contentSize = hostingView.bounds.size
+            let contentSize = hostingView.fittingSize
+            hostingView.frame = CGRect(origin: .zero, size: contentSize)
+
             let visibleSize = scrollView.contentView.bounds.size
-            let scrollPoint = NSPoint(x: (contentSize.width - visibleSize.width) / 2 + 500,
-                                      y: (contentSize.height - visibleSize.height) / 2)
+            let scrollPoint = NSPoint(
+                x: (contentSize.width - visibleSize.width) / 2 + 500,
+                y: (contentSize.height - visibleSize.height) / 2
+            )
             scrollView.contentView.scroll(to: scrollPoint)
         }
+
+        // Click-and-drag to pan
+        let pan = NSPanGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handlePan(_:)))
+        scrollView.addGestureRecognizer(pan)
 
         return scrollView
     }
 
-    func updateNSView(_ nsView: NSScrollView, context _: Context) {
-        if let hostingView = nsView.documentView as? NSHostingView<Content> {
+    func updateNSView(_ nsView: NSScrollView, context: Context) {
+        if let hostingView = context.coordinator.hostingView {
             hostingView.rootView = content
         }
+    }
+
+    class Coordinator: NSObject {
+        fileprivate weak var scrollView: CanvasScrollView?
+        fileprivate weak var hostingView: CanvasHostingView<Content>?
+        private var lastDragLocation: NSPoint = .zero
+
+        @objc
+        func handlePan(_ gesture: NSPanGestureRecognizer) {
+            guard let scrollView else { return }
+            let location = gesture.location(in: scrollView)
+
+            switch gesture.state {
+            case .began:
+                lastDragLocation = location
+
+            case .changed:
+                let delta = NSPoint(x: location.x - lastDragLocation.x, y: location.y - lastDragLocation.y)
+                lastDragLocation = location
+
+                let clipView = scrollView.contentView
+                var origin = clipView.bounds.origin
+                // NSScrollView is non-flipped (Y increases upward), so drag-down gives negative
+                // delta.y. Subtracting it increases origin.y, which scrolls the flipped clip view down.
+                origin.x -= delta.x
+                origin.y -= delta.y
+                let constrainedOrigin = clipView.constrainBoundsRect(
+                    NSRect(origin: origin, size: clipView.bounds.size)
+                ).origin
+                clipView.scroll(to: constrainedOrigin)
+                scrollView.reflectScrolledClipView(clipView)
+
+            default:
+                break
+            }
+        }
+
     }
 }
 
@@ -198,11 +287,11 @@ struct ConnectionLinesView: View {
     }
 
     private func lineThickness(for speed: Double?) -> CGFloat {
-        let s = speed ?? 480.0
-        if s <= 12.0 { return 1.5 }
-        if s <= 480.0 { return 3.0 }
-        if s <= 5000.0 { return 5.0 }
-        if s <= 10000.0 { return 7.0 }
+        let mbps = speed ?? 480.0
+        if mbps <= 12.0 { return 1.5 }
+        if mbps <= 480.0 { return 3.0 }
+        if mbps <= 5000.0 { return 5.0 }
+        if mbps <= 10000.0 { return 7.0 }
         return 10.0
     }
 }
@@ -257,7 +346,13 @@ struct DeviceCardView: View {
         }
         .frame(width: 280, height: 70)
         .background(RoundedRectangle(cornerRadius: 14).fill(Color(NSColor.controlBackgroundColor)))
-        .overlay(RoundedRectangle(cornerRadius: 14).stroke(device.isBottlenecked ? Color.red : Color.white.opacity(0.1), lineWidth: device.isBottlenecked ? 2 : 1))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14)
+                .stroke(
+                    device.isBottlenecked ? Color.red : Color.white.opacity(0.1),
+                    lineWidth: device.isBottlenecked ? 2 : 1
+                )
+        )
         .shadow(color: .black.opacity(0.2), radius: 8, y: 4)
     }
 
@@ -276,46 +371,72 @@ struct DeviceCardView: View {
 
 struct HostMacBookNode: View {
     var body: some View {
-        ZStack {
-            // Main Chassis (Space Gray Aluminum)
-            RoundedRectangle(cornerRadius: 24)
-                .fill(LinearGradient(colors: [Color(white: 0.45), Color(white: 0.3)], startPoint: .top, endPoint: .bottom))
-                .frame(width: 400, height: 280)
-                .overlay(RoundedRectangle(cornerRadius: 24).stroke(Color.white.opacity(0.2), lineWidth: 1.5))
-                .shadow(color: .black.opacity(0.5), radius: 30, y: 15)
-
-            VStack(spacing: 20) {
-                // Screen Area (Larger and more distinct)
-                RoundedRectangle(cornerRadius: 14)
-                    .fill(Color.black)
-                    .frame(width: 360, height: 160)
+        VStack(spacing: 2) {
+            // Lid (display)
+            ZStack {
+                RoundedRectangle(cornerRadius: 16)
+                    .fill(LinearGradient(
+                        colors: [Color(white: 0.42), Color(white: 0.32)],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    ))
+                    .frame(width: 340, height: 220)
                     .overlay(
-                        ZStack {
-                            // Desktop Glow
-                            Circle().fill(Color.blue.opacity(0.15)).blur(radius: 40).frame(width: 200)
-                            // Subtle Screen Frame
-                            RoundedRectangle(cornerRadius: 14).stroke(Color.white.opacity(0.1), lineWidth: 1)
-                        }
+                        RoundedRectangle(cornerRadius: 16)
+                            .stroke(Color.white.opacity(0.15), lineWidth: 1)
                     )
 
-                // Keyboard area well
                 RoundedRectangle(cornerRadius: 8)
-                    .fill(Color.black.opacity(0.5))
-                    .frame(width: 320, height: 50)
-
-                // Trackpad
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(Color.white.opacity(0.05))
-                    .frame(width: 140, height: 40)
+                    .fill(Color.black)
+                    .frame(width: 300, height: 185)
+                    .overlay(
+                        ZStack {
+                            Circle()
+                                .fill(Color.blue.opacity(0.12))
+                                .blur(radius: 30)
+                                .frame(width: 160)
+                            RoundedRectangle(cornerRadius: 8)
+                                .stroke(Color.white.opacity(0.08), lineWidth: 0.5)
+                        }
+                    )
             }
-            .offset(y: -10)
+            .shadow(color: .black.opacity(0.4), radius: 20, y: 8)
 
-            // Physical Port Indents on the left
-            VStack(spacing: 40) {
-                Capsule().fill(Color.black).frame(width: 6, height: 22)
-                Capsule().fill(Color.black).frame(width: 6, height: 22)
+            // Base (keyboard deck)
+            ZStack {
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(LinearGradient(
+                        colors: [Color(white: 0.35), Color(white: 0.28)],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    ))
+                    .frame(width: 370, height: 100)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12)
+                            .stroke(Color.white.opacity(0.1), lineWidth: 1)
+                    )
+
+                VStack(spacing: 8) {
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(Color.black.opacity(0.4))
+                        .frame(width: 300, height: 40)
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(Color.white.opacity(0.04))
+                        .frame(width: 120, height: 30)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 4)
+                                .stroke(Color.white.opacity(0.06), lineWidth: 0.5)
+                        )
+                }
+
+                // USB-C port indents on left side of base
+                VStack(spacing: 20) {
+                    Capsule().fill(Color.black.opacity(0.6)).frame(width: 5, height: 16)
+                    Capsule().fill(Color.black.opacity(0.6)).frame(width: 5, height: 16)
+                }
+                .offset(x: -183)
             }
-            .offset(x: -200, y: -30)
+            .shadow(color: .black.opacity(0.5), radius: 15, y: 10)
         }
     }
 }
@@ -337,6 +458,7 @@ struct LegendBox: View {
         .padding(16)
         .background(RoundedRectangle(cornerRadius: 16).fill(.ultraThinMaterial))
         .shadow(color: .black.opacity(0.2), radius: 10)
+        .fixedSize()
     }
 }
 
@@ -349,6 +471,6 @@ struct LegendRow: View {
             Spacer()
             Text(label).font(.caption2).foregroundColor(.secondary)
         }
-        .frame(width: 180)
+        .frame(width: 220)
     }
 }
