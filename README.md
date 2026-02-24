@@ -50,3 +50,4 @@ swiftlint
 - `Sources/CThroughEngine`: Core logic for IOKit discovery and the `Views` library.
 - `Sources/C-Through`: Main application entry point.
 - `Tests`: Comprehensive XCTest suite.
+
