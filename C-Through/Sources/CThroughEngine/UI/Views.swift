@@ -75,6 +75,7 @@ public struct ContentView: View {
                                 }
                         }
                     }
+                    .contentShape(Rectangle()) // Ensure the entire padded area is interactive
                     // Generous padding creates the "infinite canvas" feel around the content
                     .padding(1000)
                     .backgroundPreferenceValue(DeviceAnchorKey.self) { anchors in
@@ -126,7 +127,11 @@ private class CanvasHostingView<Content: View>: NSHostingView<Content> {
     weak var parentScrollView: CanvasScrollView?
 
     override func magnify(with event: NSEvent) {
-        parentScrollView?.magnify(with: event)
+        if let parentScrollView {
+            parentScrollView.magnify(with: event)
+        } else {
+            super.magnify(with: event)
+        }
     }
 }
 
@@ -136,16 +141,23 @@ private class CanvasScrollView: NSScrollView {
             let delta = event.scrollingDeltaY
             let factor = delta > 0 ? 1.05 : 0.95
             let newMag = max(minMagnification, min(maxMagnification, magnification * factor))
-            setMagnification(newMag, centeredAt: convert(event.locationInWindow, from: nil))
+            
+            // Native setMagnification expects a point in the DOCUMENT view's coordinate system
+            if let docView = documentView {
+                let pointInDoc = docView.convert(event.locationInWindow, from: nil)
+                setMagnification(newMag, centeredAt: pointInDoc)
+            }
         } else {
             super.scrollWheel(with: event)
         }
     }
 
     override func magnify(with event: NSEvent) {
-        let rawMag = magnification * (1 + event.magnification)
-        let newMag = max(minMagnification, min(maxMagnification, rawMag))
-        setMagnification(newMag, centeredAt: convert(event.locationInWindow, from: nil))
+        let newMag = max(minMagnification, min(maxMagnification, magnification * (1 + event.magnification)))
+        if let docView = documentView {
+            let pointInDoc = docView.convert(event.locationInWindow, from: nil)
+            setMagnification(newMag, centeredAt: pointInDoc)
+        }
     }
 }
 
@@ -159,9 +171,14 @@ struct NativeZoomableCanvas<Content: View>: NSViewRepresentable {
     }
 
     func makeNSView(context: Context) -> NSScrollView {
+        // Bring app to front (diagnostic for the "backgrounding" issue)
+        NSApp.activate(ignoringOtherApps: true)
+
         let scrollView = CanvasScrollView()
         scrollView.hasVerticalScroller = false
         scrollView.hasHorizontalScroller = false
+
+        // Re-enable native magnification support but we still override the triggers
         scrollView.allowsMagnification = true
         scrollView.magnification = 1.0
         scrollView.maxMagnification = 5.0
