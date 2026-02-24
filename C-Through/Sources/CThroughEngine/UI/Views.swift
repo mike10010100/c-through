@@ -291,6 +291,20 @@ private class CanvasScrollView: NSScrollView {
             super.magnify(with: event)
         }
     }
+
+    override func scrollWheel(with event: NSEvent) {
+        if event.modifierFlags.contains(.command) && allowsMagnification {
+            let dy = event.scrollingDeltaY
+            if dy != 0 {
+                let magDelta = dy * (event.hasPreciseScrollingDeltas ? 0.005 : 0.05)
+                let newMag = max(minMagnification, min(maxMagnification, magnification + magDelta))
+                let pointInView = contentView.convert(event.locationInWindow, from: nil)
+                setMagnification(newMag, centeredAt: pointInView)
+            }
+        } else {
+            super.scrollWheel(with: event)
+        }
+    }
 }
 
 // MARK: - Native Zoomable Canvas
@@ -322,6 +336,7 @@ struct NativeZoomableCanvas<Content: View>: NSViewRepresentable {
         // Click-and-drag to pan
         let pan = NSPanGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handlePan(_:)))
         pan.buttonMask = 0x1
+        pan.delaysPrimaryMouseButtonEvents = false
         scrollView.addGestureRecognizer(pan)
 
         // Initial centering
