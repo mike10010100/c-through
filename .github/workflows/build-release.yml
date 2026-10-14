@@ -20,9 +20,9 @@ jobs:
           fetch-depth: 0 # Required for tagging
 
       - name: Set Swift Version
-        uses: swift-actions/setup-swift@v2
+        uses: swift-actions/setup-swift@v3
         with:
-          swift-version: "5.9"
+          swift-version: "5.10"
 
       - name: Run Tests
         run: swift test
