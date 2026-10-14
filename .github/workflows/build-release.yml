@@ -22,7 +22,7 @@ jobs:
       - name: Set Swift Version
         uses: swift-actions/setup-swift@v3
         with:
-          swift-version: "5.9"
+          swift-version: "5.10"
 
       - name: Run Tests
         run: swift test
